@@ -1,126 +1,769 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>WebXR Hand Tracking Template</title>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebXR Golden Hour - Hand Tracking</title>
     <style>
         body {
             margin: 0;
-            background-color: #111;
-            font-family: sans-serif;
+            padding: 0;
             overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
-        #info {
+        canvas {
+            display: block;
+        }
+        #ui-overlay {
             position: absolute;
-            top: 10px;
-            width: 100%;
-            text-align: center;
+            top: 20px;
+            left: 20px;
             color: white;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px 25px;
+            border-radius: 12px;
+            pointer-events: none; /* Let clicks pass through to VRButton */
             z-index: 100;
-            pointer-events: none;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
-        .instructions {
+        #ui-overlay h1 {
+            margin: 0 0 10px 0;
+            font-size: 20px;
+            color: #ffaa55;
+        }
+        #ui-overlay ul {
+            margin: 0;
+            padding-left: 20px;
             font-size: 14px;
-            background: rgba(0,0,0,0.5);
-            padding: 10px;
-            border-radius: 8px;
-            display: inline-block;
+            line-height: 1.6;
+        }
+        #error-msg {
+            color: #ff5555;
+            margin-top: 10px;
+            font-weight: bold;
+            display: none;
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        <div class="instructions">
-            <b>WebXR Hand Tracking Template</b><br>
-            Pinch Thumb & Index: Pick up objects | Make Fist: Destroy objects<br>
-            Open Palm towards Face: Move Forward
-        </div>
+
+    <div id="ui-overlay">
+        <h1>Golden Hour XR</h1>
+        <ul>
+            <li><b>Pinch (Thumb + Index):</b> Grab objects (Butterflies, Flowers).</li>
+            <li><b>Fist:</b> Break nearby Unicorns.</li>
+            <li><b>Open Palm (facing you):</b> Move in the palm's direction.</li>
+        </ul>
+        <div id="error-msg">WebXR Hand Tracking not detected.</div>
     </div>
 
+    <!-- Import Map for modern Three.js modules -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.150.1/examples/jsm/"
+            }
+        }
+    </script>
+
     <script type="module">
-        import * as THREE from 'https://cdn.skypack.dev/three@0.128.0/build/three.module.js';
-        import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
-        import { XRHandModelFactory } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/XRHandModelFactory.js';
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 
-        // --- Configuration & Constants ---
-        const PINCH_THRESHOLD = 0.02; // Meters
-        const FIST_THRESHOLD = 0.08;  // Distance from tips to wrist
-        const MOVE_SPEED = 0.03;      // Speed per frame
-        const PALM_DOT_THRESHOLD = -0.5; // Palm facing head
-
-        // --- Core Variables ---
-        let camera, scene, renderer, hand1, hand2, handModelFactory;
-        let controller1, controller2;
-        let xrGroup; // Group for moving the user (locomotion)
+        // --- Global Variables ---
+        let scene, camera, renderer, playerSpace;
+        let hand1, hand2;
+        let handModelFactory;
         
-        const interactables = [];
-        const grabbedObjects = { left: null, right: null };
+        // Environment logic arrays
+        const grabbables = [];
+        const breakables = [];
+        const butterflies = [];
+        const fallingObjects = [];
+        const particleBursts = [];
+        let petalSystem, waterfallSystem;
+
+        const clock = new THREE.Clock();
 
         init();
-        animate();
+        setupEnvironment();
+        setupXR();
+        renderer.setAnimationLoop(render);
 
+        // --- 1. Foundation & Setup ---
         function init() {
-            // 1. Scene Setup
+            // Scene & Fog (Golden Hour Atmosphere)
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x222222);
+            scene.background = new THREE.Color(0xdca070);
+            scene.fog = new THREE.FogExp2(0xdca070, 0.015);
 
-            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            // Camera
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
             
-            // xrGroup allows us to move the user in the virtual world without fighting the HMD tracking
-            xrGroup = new THREE.Group();
-            xrGroup.add(camera);
-            scene.add(xrGroup);
+            // Player Space (XR Rig) - Binds camera and hands together for locomotion
+            playerSpace = new THREE.Group();
+            playerSpace.position.set(0, 0, 5); // Start slightly back from the center
+            scene.add(playerSpace);
+            playerSpace.add(camera);
 
-            // 2. Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-            scene.add(ambientLight);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-            directionalLight.position.set(1, 2, 1);
-            scene.add(directionalLight);
-
-            // 3. Environment
-            const grid = new THREE.GridHelper(20, 20, 0x888888, 0x444444);
-            scene.add(grid);
-
-            // Spawn Interactable Cubes
-            const geometries = [new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.SphereGeometry(0.07, 16, 16)];
-            for (let i = 0; i < 10; i++) {
-                const material = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
-                const mesh = new THREE.Mesh(geometries[i % 2], material);
-                mesh.position.set(Math.random() * 2 - 1, 0.5, Math.random() * -2 - 0.5);
-                scene.add(mesh);
-                interactables.push(mesh);
-            }
-
-            // 4. Renderer Setup
+            // Renderer
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             renderer.xr.enabled = true;
-            // Use local-floor to ensure Y=0 is the actual ground
-            renderer.xr.setReferenceSpaceType('local-floor');
             document.body.appendChild(renderer.domElement);
-            document.body.appendChild(VRButton.createButton(renderer));
 
-            // 5. Hand Tracking Setup
-            handModelFactory = new XRHandModelFactory();
+            // WebXR Button (Requesting hand tracking)
+            document.body.appendChild(VRButton.createButton(renderer, { 
+                optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] 
+            }));
 
-            // Hand 1 (Left)
-            controller1 = renderer.xr.getController(0);
-            xrGroup.add(controller1);
-            hand1 = renderer.xr.getHand(0);
-            hand1.add(handModelFactory.createHandModel(hand1, "mesh"));
-            xrGroup.add(hand1);
+            // Lighting (Golden Hour)
+            const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
+            scene.add(ambientLight);
 
-            // Hand 2 (Right)
-            controller2 = renderer.xr.getController(1);
-            xrGroup.add(controller2);
-            hand2 = renderer.xr.getHand(1);
-            hand2.add(handModelFactory.createHandModel(hand2, "mesh"));
-            xrGroup.add(hand2);
+            const sunLight = new THREE.DirectionalLight(0xffaa55, 1.5);
+            sunLight.position.set(15, 10, -15);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 2048;
+            sunLight.shadow.mapSize.height = 2048;
+            sunLight.shadow.camera.near = 0.5;
+            sunLight.shadow.camera.far = 50;
+            sunLight.shadow.camera.left = -15;
+            sunLight.shadow.camera.right = 15;
+            sunLight.shadow.camera.top = 15;
+            sunLight.shadow.camera.bottom = -15;
+            scene.add(sunLight);
+
+            const fillLight = new THREE.DirectionalLight(0x88bbff, 0.4);
+            fillLight.position.set(-10, 5, 10);
+            scene.add(fillLight);
 
             window.addEventListener('resize', onWindowResize);
+            
+            // Basic WebXR support check for UI feedback
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                    if (!supported) document.getElementById('error-msg').style.display = 'block';
+                });
+            } else {
+                document.getElementById('error-msg').style.display = 'block';
+            }
+        }
+
+        // --- 2. Environment & Aesthetics ---
+        function setupEnvironment() {
+            // Ground
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x4a7c59, roughness: 0.9, metalness: 0.1 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Cherry Blossom Trees
+            createCherryTree(-4, 0, -6);
+            createCherryTree(4, 0, -6);
+
+            // Hammock
+            createHammock(-4, 1.5, -6, 4, 1.5, -6);
+
+            // Lake & Waterfall
+            createLakeAndWaterfall();
+
+            // Flora & Fauna
+            scatterFlowers();
+            createButterflies(10);
+            
+            // Unicorns (Breakables)
+            createUnicorn(-2, 0, -3);
+            createUnicorn(3, 0, -2);
+            createUnicorn(0, 0, -8);
+
+            // Falling Petals Particle System
+            createPetalSystem();
+        }
+
+        function createCherryTree(x, y, z) {
+            const tree = new THREE.Group();
+            tree.position.set(x, y, z);
+
+            // Trunk
+            const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 3, 8);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 1.0 });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = 1.5;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            tree.add(trunk);
+
+            // Canopy (Multiple overlapping spheres)
+            const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffb7c5, roughness: 0.8, transparent: true, opacity: 0.95 });
+            const positions = [[0, 3.5, 0], [-1, 3, 1], [1, 2.8, -1], [1.2, 3.2, 0.8], [-1.5, 3.5, -0.5]];
+            positions.forEach(pos => {
+                const leaves = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 16), canopyMat);
+                leaves.position.set(...pos);
+                leaves.scale.set(1, 0.8, 1);
+                leaves.castShadow = true;
+                tree.add(leaves);
+            });
+
+            scene.add(tree);
+        }
+
+        function createHammock(x1, y1, z1, x2, y2, z2) {
+            const p1 = new THREE.Vector3(x1, y1, z1);
+            const p2 = new THREE.Vector3(x2, y2, z2);
+            const distance = p1.distanceTo(p2);
+            
+            const hammockGeo = new THREE.PlaneGeometry(distance, 1.5, 20, 5);
+            const positions = hammockGeo.attributes.position;
+            // Bend the plane to look like a hanging hammock
+            for (let i = 0; i < positions.count; i++) {
+                const x = positions.getX(i);
+                // Parabolic curve: y = x^2 * factor
+                const drop = Math.pow(x / (distance / 2), 2) * 0.5 - 0.5;
+                positions.setZ(i, positions.getZ(i) + drop);
+            }
+            hammockGeo.computeVertexNormals();
+
+            const hammockMat = new THREE.MeshStandardMaterial({ color: 0xddccaa, side: THREE.DoubleSide, roughness: 0.9 });
+            const hammock = new THREE.Mesh(hammockGeo, hammockMat);
+            
+            // Position between trees
+            hammock.position.copy(p1).lerp(p2, 0.5);
+            hammock.lookAt(p2);
+            hammock.rotateY(Math.PI / 2);
+            hammock.rotateX(-Math.PI / 2); // Lay flat
+            hammock.position.y -= 0.5; // sagging
+            hammock.castShadow = true;
+            hammock.receiveShadow = true;
+
+            scene.add(hammock);
+        }
+
+        function createLakeAndWaterfall() {
+            // Lake
+            const lakeGeo = new THREE.PlaneGeometry(15, 10);
+            const lakeMat = new THREE.MeshPhysicalMaterial({ 
+                color: 0x2288cc, transparent: true, opacity: 0.8, roughness: 0.1, transmission: 0.5 
+            });
+            const lake = new THREE.Mesh(lakeGeo, lakeMat);
+            lake.rotation.x = -Math.PI / 2;
+            lake.position.set(12, 0.05, -10);
+            scene.add(lake);
+
+            // Cliff
+            const cliffGeo = new THREE.BoxGeometry(4, 6, 4);
+            const cliffMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.9 });
+            const cliff = new THREE.Mesh(cliffGeo, cliffMat);
+            cliff.position.set(16, 2.5, -10);
+            cliff.castShadow = true;
+            scene.add(cliff);
+
+            // Waterfall Particles
+            const count = 500;
+            const wfGeo = new THREE.BufferGeometry();
+            const wfPos = new Float32Array(count * 3);
+            for(let i=0; i<count; i++) {
+                wfPos[i*3] = 14 + Math.random() * 0.5; // X
+                wfPos[i*3+1] = Math.random() * 5;      // Y
+                wfPos[i*3+2] = -11 + Math.random() * 2; // Z
+            }
+            wfGeo.setAttribute('position', new THREE.BufferAttribute(wfPos, 3));
+            const wfMat = new THREE.PointsMaterial({ color: 0x88ccff, size: 0.1, transparent: true, opacity: 0.6 });
+            waterfallSystem = new THREE.Points(wfGeo, wfMat);
+            scene.add(waterfallSystem);
+        }
+
+        function scatterFlowers() {
+            const flowerColors = [0xff66bb, 0xffff66, 0xffffff];
+            for (let i = 0; i < 40; i++) {
+                const flower = new THREE.Group();
+                const x = (Math.random() - 0.5) * 30;
+                const z = (Math.random() - 0.5) * 30;
+                if (x > 8 && z < -5) continue; // Skip lake area
+
+                flower.position.set(x, 0, z);
+
+                // Stem
+                const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.3), new THREE.MeshStandardMaterial({color: 0x22aa22}));
+                stem.position.y = 0.15;
+                flower.add(stem);
+
+                // Top
+                const color = flowerColors[Math.floor(Math.random() * flowerColors.length)];
+                const top = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshStandardMaterial({color: color}));
+                top.position.y = 0.3;
+                flower.add(top);
+
+                // Make interactive
+                flower.userData.grabbable = true;
+                const hitBox = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, 0.3), new THREE.MeshBasicMaterial({visible: false}));
+                hitBox.position.y = 0.25;
+                flower.add(hitBox);
+
+                scene.add(flower);
+                grabbables.push(flower);
+            }
+        }
+
+        function createButterflies(count) {
+            const wingGeo = new THREE.PlaneGeometry(0.1, 0.1);
+            wingGeo.translate(0.05, 0, 0); // offset origin to hinge
+            const wingMat = new THREE.MeshBasicMaterial({ color: 0x44aaff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+
+            for (let i = 0; i < count; i++) {
+                const butterfly = new THREE.Group();
+                
+                const wingLeft = new THREE.Mesh(wingGeo, wingMat);
+                const wingRight = new THREE.Mesh(wingGeo, wingMat);
+                wingRight.rotation.y = Math.PI;
+
+                butterfly.add(wingLeft);
+                butterfly.add(wingRight);
+
+                butterfly.position.set((Math.random() - 0.5) * 10, 1 + Math.random(), (Math.random() - 0.5) * 10 - 3);
+                
+                // Animation properties
+                butterfly.userData = {
+                    leftWing: wingLeft,
+                    rightWing: wingRight,
+                    timeOffset: Math.random() * Math.PI * 2,
+                    speed: 0.5 + Math.random() * 0.5,
+                    origin: butterfly.position.clone(),
+                    grabbable: true // Can catch butterflies!
+                };
+
+                scene.add(butterfly);
+                butterflies.push(butterfly);
+                grabbables.push(butterfly);
+            }
+        }
+
+        function createUnicorn(x, y, z) {
+            const unicorn = new THREE.Group();
+            unicorn.position.set(x, y, z);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const hornMat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.3, metalness: 0.8 });
+            const maneMat = new THREE.MeshStandardMaterial({ color: 0xffbbdd });
+
+            // Body
+            const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.6, 4, 8), mat);
+            body.rotation.z = Math.PI / 2;
+            body.position.y = 0.7;
+            body.castShadow = true;
+            unicorn.add(body);
+
+            // Legs
+            const legGeo = new THREE.CylinderGeometry(0.08, 0.05, 0.6);
+            const positions = [[-0.3, 0.3, 0.15], [0.3, 0.3, 0.15], [-0.3, 0.3, -0.15], [0.3, 0.3, -0.15]];
+            positions.forEach(pos => {
+                const leg = new THREE.Mesh(legGeo, mat);
+                leg.position.set(...pos);
+                leg.castShadow = true;
+                unicorn.add(leg);
+            });
+
+            // Neck & Head
+            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 0.5), mat);
+            neck.position.set(0.4, 1.0, 0);
+            neck.rotation.z = -Math.PI / 6;
+            unicorn.add(neck);
+
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.25, 0.4), mat);
+            head.position.set(0.55, 1.25, 0);
+            unicorn.add(head);
+
+            // Horn
+            const horn = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.3), hornMat);
+            horn.position.set(0.65, 1.45, 0);
+            horn.rotation.x = Math.PI / 8;
+            horn.rotation.z = -Math.PI / 4;
+            unicorn.add(horn);
+
+            // Mane (Simple blocks)
+            const mane = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.4, 0.1), maneMat);
+            mane.position.set(0.3, 1.15, 0);
+            mane.rotation.z = -Math.PI / 6;
+            unicorn.add(mane);
+
+            unicorn.userData = {
+                breakable: true,
+                baseY: y,
+                bobOffset: Math.random() * Math.PI * 2
+            };
+
+            scene.add(unicorn);
+            breakables.push(unicorn);
+        }
+
+        function createPetalSystem() {
+            const count = 300;
+            const geo = new THREE.BufferGeometry();
+            const pos = new Float32Array(count * 3);
+            for(let i=0; i<count; i++) {
+                pos[i*3] = (Math.random() - 0.5) * 12; // X around trees
+                pos[i*3+1] = Math.random() * 5;        // Y
+                pos[i*3+2] = -5 + (Math.random() - 0.5) * 8; // Z around trees
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            
+            // simple circular petal texture
+            const canvas = document.createElement('canvas');
+            canvas.width = 16; canvas.height = 16;
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#ffb7c5';
+            context.beginPath();
+            context.arc(8, 8, 8, 0, Math.PI * 2);
+            context.fill();
+            const tex = new THREE.CanvasTexture(canvas);
+
+            const mat = new THREE.PointsMaterial({ 
+                size: 0.1, map: tex, transparent: true, opacity: 0.8, depthWrite: false 
+            });
+            petalSystem = new THREE.Points(geo, mat);
+            scene.add(petalSystem);
+        }
+
+        // --- 3. Hand Tracking & WebXR Setup ---
+        function setupXR() {
+            // XR Hand setup
+            handModelFactory = new XRHandModelFactory();
+
+            // Hand 1 (usually Right)
+            hand1 = renderer.xr.getHand(0);
+            playerSpace.add(hand1); // Add to playerSpace to move with player
+            const model1 = handModelFactory.createHandModel(hand1, "mesh");
+            // Make hands slightly transparent white
+            model1.material = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+            hand1.add(model1);
+            setupHandLogic(hand1);
+
+            // Hand 2 (usually Left)
+            hand2 = renderer.xr.getHand(1);
+            playerSpace.add(hand2); // Add to playerSpace to move with player
+            const model2 = handModelFactory.createHandModel(hand2, "mesh");
+            model2.material = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+            hand2.add(model2);
+            setupHandLogic(hand2);
+        }
+
+        function setupHandLogic(hand) {
+            hand.userData = {
+                isPinching: false,
+                isFist: false,
+                grabbedObject: null,
+                jointsReady: false
+            };
+
+            // Event listeners to detect when tracking starts/stops
+            hand.addEventListener('connected', (e) => {
+                hand.userData.xrInputSource = e.data;
+            });
+            hand.addEventListener('disconnected', () => {
+                hand.userData.xrInputSource = null;
+                if (hand.userData.grabbedObject) dropObject(hand);
+            });
+        }
+
+        // --- 4. Animation & Interaction Loop ---
+        function render() {
+            const dt = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            animateEnvironment(dt, time);
+            
+            // Update hands
+            processHand(hand1, dt);
+            processHand(hand2, dt);
+
+            // Apply gravity to dropped objects
+            updateFallingObjects(dt);
+
+            // Update particle bursts
+            updateBursts(dt);
+
+            renderer.render(scene, camera);
+        }
+
+        function animateEnvironment(dt, time) {
+            // Butterflies
+            butterflies.forEach(b => {
+                // Flapping
+                const angle = Math.sin(time * 15 + b.userData.timeOffset) * 1.2;
+                b.userData.leftWing.rotation.z = angle;
+                b.userData.rightWing.rotation.z = -angle;
+
+                // Only move if not grabbed
+                if (b.parent === scene) {
+                    b.position.y = b.userData.origin.y + Math.sin(time * 2 + b.userData.timeOffset) * 0.2;
+                    b.position.x = b.userData.origin.x + Math.sin(time * 0.5 + b.userData.timeOffset) * 1.5;
+                    b.position.z = b.userData.origin.z + Math.cos(time * 0.5 + b.userData.timeOffset) * 1.5;
+                    // Look along path roughly
+                    b.rotation.y = Math.atan2(Math.cos(time * 0.5), -Math.sin(time * 0.5));
+                }
+            });
+
+            // Unicorns (Bobbing)
+            breakables.forEach(u => {
+                if(u.visible) {
+                    u.position.y = u.userData.baseY + Math.sin(time * 1.5 + u.userData.bobOffset) * 0.05;
+                }
+            });
+
+            // Waterfall
+            if (waterfallSystem) {
+                const positions = waterfallSystem.geometry.attributes.position.array;
+                for (let i = 1; i < positions.length; i += 3) {
+                    positions[i] -= dt * 3; // fall speed
+                    if (positions[i] < 0) positions[i] = 5; // reset height
+                }
+                waterfallSystem.geometry.attributes.position.needsUpdate = true;
+            }
+
+            // Petals
+            if (petalSystem) {
+                const positions = petalSystem.geometry.attributes.position.array;
+                for (let i = 1; i < positions.length; i += 3) {
+                    positions[i] -= dt * 0.5; // gentle fall
+                    positions[i-1] += Math.sin(time + i) * 0.01; // sway X
+                    if (positions[i] < 0) positions[i] = 4 + Math.random(); // reset height
+                }
+                petalSystem.geometry.attributes.position.needsUpdate = true;
+            }
+        }
+
+        // --- Interaction Logic Core ---
+        function processHand(hand, dt) {
+            // Ensure WebXR joints are populated (wait for frame data)
+            if (!hand.joints || !hand.joints['wrist']) return;
+            const wrist = hand.joints['wrist'];
+            if (!wrist.position || wrist.position.lengthSq() === 0) return; // Not tracking
+
+            const data = hand.userData;
+
+            // 1. Calculate Gesture States
+            const indexTip = hand.joints['index-finger-phalanx-tip'];
+            const thumbTip = hand.joints['thumb-phalanx-tip'];
+            const middleTip = hand.joints['middle-finger-phalanx-tip'];
+            const ringTip = hand.joints['ring-finger-phalanx-tip'];
+            const pinkyTip = hand.joints['pinky-finger-phalanx-tip'];
+            
+            // Pinch check
+            let currentPinch = false;
+            if (indexTip && thumbTip) {
+                const dist = indexTip.position.distanceTo(thumbTip.position);
+                currentPinch = (dist < 0.03); // 3cm pinch threshold
+            }
+
+            // Fist check
+            let currentFist = false;
+            if (indexTip && middleTip && ringTip && pinkyTip) {
+                const maxDist = 0.08; // distance to wrist
+                if (indexTip.position.distanceTo(wrist.position) < maxDist &&
+                    middleTip.position.distanceTo(wrist.position) < maxDist &&
+                    ringTip.position.distanceTo(wrist.position) < maxDist &&
+                    pinkyTip.position.distanceTo(wrist.position) < maxDist) {
+                    currentFist = true;
+                }
+            }
+
+            // 2. Apply Logic based on states
+            
+            // --- GRABBING (Pinch) ---
+            if (currentPinch && !data.isPinching) {
+                // Just pinched -> Try to grab
+                const pinchCenter = new THREE.Vector3().lerpVectors(indexTip.position, thumbTip.position, 0.5);
+                
+                // Find closest grabbable
+                let closest = null;
+                let minDist = 0.2; // 20cm grab radius
+                
+                grabbables.forEach(obj => {
+                    // Get world position of object
+                    const objWorldPos = new THREE.Vector3();
+                    obj.getWorldPosition(objWorldPos);
+                    const d = objWorldPos.distanceTo(pinchCenter);
+                    if (d < minDist) {
+                        minDist = d;
+                        closest = obj;
+                    }
+                });
+
+                if (closest) {
+                    grabObject(hand, closest);
+                }
+            } else if (!currentPinch && data.isPinching) {
+                // Released pinch -> Drop
+                if (data.grabbedObject) {
+                    dropObject(hand);
+                }
+            }
+
+            // --- BREAKING (Fist) ---
+            if (currentFist && !data.grabbedObject) {
+                breakables.forEach(unicorn => {
+                    if (!unicorn.visible) return;
+                    const uWorld = new THREE.Vector3();
+                    unicorn.getWorldPosition(uWorld);
+                    if (wrist.position.distanceTo(uWorld) < 0.4) {
+                        // Break it!
+                        unicorn.visible = false;
+                        spawnBurst(uWorld, 0xffffff);
+                    }
+                });
+            }
+
+            // --- LOCOMOTION (Open Palm Facing Face) ---
+            // If hand is open (not fist, not pinching) and holding it up
+            if (!currentFist && !currentPinch && !data.grabbedObject) {
+                const indexBase = hand.joints['index-finger-metacarpal'];
+                const pinkyBase = hand.joints['pinky-finger-metacarpal'];
+                
+                if (indexBase && pinkyBase) {
+                    // Calculate Palm Normal
+                    const v1 = new THREE.Vector3().subVectors(indexBase.position, wrist.position);
+                    const v2 = new THREE.Vector3().subVectors(pinkyBase.position, wrist.position);
+                    
+                    // Cross product gives normal. Depending on left/right hand, it points in or out.
+                    // Instead of strict handedness checks, we check the dot product against camera to see if it's pointing AT camera.
+                    const palmNormal = new THREE.Vector3().crossVectors(v1, v2).normalize();
+                    
+                    const camWorldPos = new THREE.Vector3();
+                    camera.getWorldPosition(camWorldPos);
+                    const handToCam = new THREE.Vector3().subVectors(camWorldPos, wrist.position).normalize();
+                    
+                    // If palm normal aligns with the vector to the camera OR perfectly opposite
+                    const alignment = Math.abs(palmNormal.dot(handToCam));
+                    
+                    if (alignment > 0.6) {
+                        // Palm is facing the face!
+                        // "Get the direction the palm is facing. Continuously move the user... in that direction"
+                        // Palm Normal is the direction. We normalize and apply speed.
+                        
+                        // Ensure the vector points AWAY from the palm face.
+                        // We'll use the normal that points outwards from the palm.
+                        let moveDir = palmNormal.clone();
+                        
+                        // Move playerSpace
+                        const speed = 2.0; // 2 m/s
+                        playerSpace.position.addScaledVector(moveDir, speed * dt);
+                        
+                        // Optional: constrain Y to ground
+                        playerSpace.position.y = 0; 
+                    }
+                }
+            }
+
+            // Update states
+            data.isPinching = currentPinch;
+            data.isFist = currentFist;
+        }
+
+        function grabObject(hand, object) {
+            hand.userData.grabbedObject = object;
+            // Attach to hand (preserves world transform automatically in modern three.js attach)
+            hand.attach(object);
+            
+            // Stop animations if it's a butterfly by nullifying its parent relation temporarily in logic
+            // (handled by parent === scene check in animation loop)
+        }
+
+        function dropObject(hand) {
+            const obj = hand.userData.grabbedObject;
+            hand.userData.grabbedObject = null;
+            
+            if (!obj) return;
+            
+            // Attach back to scene to maintain world coordinates
+            scene.attach(obj);
+            
+            // Add to physics array
+            fallingObjects.push({
+                mesh: obj,
+                velocity: 0
+            });
+        }
+
+        function updateFallingObjects(dt) {
+            for (let i = fallingObjects.length - 1; i >= 0; i--) {
+                const drop = fallingObjects[i];
+                drop.velocity -= 9.8 * dt; // gravity
+                drop.mesh.position.y += drop.velocity * dt;
+                
+                // Ground collision
+                if (drop.mesh.position.y <= 0) {
+                    drop.mesh.position.y = 0;
+                    // If it's a butterfly, it rests on ground (or give it back its origin to fly again)
+                    if (drop.mesh.userData.leftWing) {
+                        // Let butterfly fly away again by setting new origin
+                        drop.mesh.userData.origin.copy(drop.mesh.position);
+                        drop.mesh.userData.origin.y = 1 + Math.random(); // fly up
+                    }
+                    fallingObjects.splice(i, 1);
+                }
+            }
+        }
+
+        // --- Visual Effects ---
+        function spawnBurst(position, colorHex) {
+            const count = 30;
+            const geo = new THREE.BufferGeometry();
+            const pos = new Float32Array(count * 3);
+            const vel = [];
+            for(let i=0; i<count; i++) {
+                pos[i*3] = position.x;
+                pos[i*3+1] = position.y;
+                pos[i*3+2] = position.z;
+                
+                vel.push(new THREE.Vector3(
+                    (Math.random()-0.5)*3, 
+                    (Math.random()-0.5)*3 + 2, 
+                    (Math.random()-0.5)*3
+                ));
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            const mat = new THREE.PointsMaterial({ color: colorHex, size: 0.1, transparent: true });
+            const points = new THREE.Points(geo, mat);
+            scene.add(points);
+            
+            particleBursts.push({
+                mesh: points,
+                velocities: vel,
+                age: 0
+            });
+        }
+
+        function updateBursts(dt) {
+            for (let i = particleBursts.length - 1; i >= 0; i--) {
+                const burst = particleBursts[i];
+                burst.age += dt;
+                if (burst.age > 1.0) {
+                    scene.remove(burst.mesh);
+                    burst.mesh.geometry.dispose();
+                    burst.mesh.material.dispose();
+                    particleBursts.splice(i, 1);
+                    continue;
+                }
+                
+                const positions = burst.mesh.geometry.attributes.position.array;
+                for (let j = 0; j < burst.velocities.length; j++) {
+                    const v = burst.velocities[j];
+                    v.y -= 9.8 * dt; // gravity
+                    positions[j*3] += v.x * dt;
+                    positions[j*3+1] += v.y * dt;
+                    positions[j*3+2] += v.z * dt;
+                }
+                burst.mesh.geometry.attributes.position.needsUpdate = true;
+                burst.mesh.material.opacity = 1.0 - burst.age; // fade out
+            }
         }
 
         function onWindowResize() {
@@ -129,102 +772,6 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        // --- Interaction Logic ---
-
-        function getJointPosition(hand, jointName) {
-            // WebXR Hand Joint Indices: 0=Wrist, 4=ThumbTip, 9=IndexTip, etc.
-            if (hand && hand.joints && hand.joints[jointName]) {
-                return hand.joints[jointName].position;
-            }
-            return null;
-        }
-
-        function handleGestures(hand, side) {
-            if (!hand.joints || !hand.joints['wrist']) return;
-
-            const wrist = hand.joints['wrist'].position;
-            const thumbTip = hand.joints['thumb-phalanx-distal'].position; 
-            const indexTip = hand.joints['index-finger-phalanx-distal'].position;
-            const middleTip = hand.joints['middle-finger-phalanx-distal'].position;
-            const ringTip = hand.joints['ring-finger-phalanx-distal'].position;
-            const pinkyTip = hand.joints['pinky-finger-phalanx-distal'].position;
-
-            // 1. PINCH DETECTION (Thumb to Index)
-            const pinchDist = thumbTip.distanceTo(indexTip);
-            const isPinching = pinchDist < PINCH_THRESHOLD;
-
-            if (isPinching) {
-                if (!grabbedObjects[side]) {
-                    // Check for collision with interactables
-                    interactables.forEach(obj => {
-                        if (indexTip.distanceTo(obj.position) < 0.1) {
-                            grabbedObjects[side] = obj;
-                        }
-                    });
-                } else {
-                    // Update object position to pinch point
-                    grabbedObjects[side].position.lerp(indexTip, 0.4);
-                }
-            } else {
-                grabbedObjects[side] = null; // Drop
-            }
-
-            // 2. FIST DETECTION (Break Logic)
-            const isFist = (
-                indexTip.distanceTo(wrist) < FIST_THRESHOLD &&
-                middleTip.distanceTo(wrist) < FIST_THRESHOLD &&
-                pinkyTip.distanceTo(wrist) < FIST_THRESHOLD
-            );
-
-            if (isFist) {
-                interactables.forEach((obj, index) => {
-                    if (wrist.distanceTo(obj.position) < 0.15) {
-                        scene.remove(obj);
-                        interactables.splice(index, 1);
-                        // Add visual feedback here if desired
-                    }
-                });
-            }
-
-            // 3. PALM LOCOMOTION (Forward Move)
-            // Check if hand is open (fingers far from wrist)
-            const isOpen = indexTip.distanceTo(wrist) > FIST_THRESHOLD * 1.5;
-            
-            if (isOpen && !isPinching) {
-                // Determine palm orientation using wrist and middle finger base
-                const palmNormal = new THREE.Vector3();
-                const v1 = new THREE.Vector3().subVectors(indexTip, wrist).normalize();
-                const v2 = new THREE.Vector3().subVectors(pinkyTip, wrist).normalize();
-                palmNormal.crossVectors(v1, v2).normalize();
-
-                // Get direction user is looking
-                const lookDir = new THREE.Vector3();
-                camera.getWorldDirection(lookDir);
-
-                // If palm normal points towards camera, move forward
-                // We use dot product: if ~ -1, they face each other
-                const cameraToHand = new THREE.Vector3().subVectors(camera.position, wrist).normalize();
-                const alignment = palmNormal.dot(cameraToHand);
-
-                if (alignment < PALM_DOT_THRESHOLD) {
-                    xrGroup.position.x += lookDir.x * MOVE_SPEED;
-                    xrGroup.position.z += lookDir.z * MOVE_SPEED;
-                }
-            }
-        }
-
-        // --- Animation Loop ---
-        function animate() {
-            renderer.setAnimationLoop(render);
-        }
-
-        function render() {
-            // Update gestures for both hands
-            handleGestures(hand1, 'left');
-            handleGestures(hand2, 'right');
-
-            renderer.render(scene, camera);
-        }
     </script>
 </body>
 </html>
