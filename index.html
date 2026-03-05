@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR Hand Tracking Template</title>
+
+    <!-- A-Frame and Physics System -->
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
+
+    <script>
+        /**
+         * Hand Interactions Component
+         * Handles both Pinch-to-Grab and Fist-to-Break mechanics.
+         */
+        AFRAME.registerComponent('hand-interactions', {
+            init: function () {
+                this.grabbedEl = null;
+                this.hoverEl = null;
+                this.isFist = false;
+
+                // Velocity tracking for throwing objects
+                this.positions = [];
+                this.velocity = new THREE.Vector3();
+                this.handPos = new THREE.Vector3();
+                this.worldPos = new THREE.Vector3();
+
+                // Bind native A-Frame pinch events
+                this.onPinchStart = this.onPinchStart.bind(this);
+                this.onPinchEnd = this.onPinchEnd.bind(this);
+                this.el.addEventListener('pinchstarted', this.onPinchStart);
+                this.el.addEventListener('pinchended', this.onPinchEnd);
+            },
+
+            onPinchStart: function () {
+                if (this.hoverEl && !this.grabbedEl) {
+                    this.grabbedEl = this.hoverEl;
+                    
+                    // Switch to kinematic body so it follows the hand without physics engine fighting
+                    this.grabbedEl.setAttribute('dynamic-body', 'type: kinematic');
+
+                    // Restore visual color from hover state
+                    if (this.grabbedEl.dataset.originalColor) {
+                        this.grabbedEl.setAttribute('color', this.grabbedEl.dataset.originalColor);
+                    }
+                }
+            },
+
+            onPinchEnd: function () {
+                if (this.grabbedEl) {
+                    // Restore dynamic physics
+                    this.grabbedEl.setAttribute('dynamic-body', 'type: dynamic');
+
+                    // Apply the tracked velocity to simulate throwing
+                    const body = this.grabbedEl.components['dynamic-body'].body;
+                    if (body) {
+                        // Multiply velocity slightly for a better throwing feel
+                        body.velocity.set(this.velocity.x * 1.5, this.velocity.y * 1.5, this.velocity.z * 1.5);
+                    }
+
+                    this.grabbedEl = null;
+                }
+            },
+
+            tick: function (time, timeDelta) {
+                this.el.object3D.getWorldPosition(this.handPos);
+
+                // --- 1. Track Hand Velocity ---
+                if (timeDelta > 0) {
+                    this.positions.push({ pos: this.handPos.clone(), time: time });
+                    if (this.positions.length > 5) this.positions.shift(); // Keep last 5 frames
+
+                    if (this.positions.length > 1) {
+                        const oldest = this.positions[0];
+                        const latest = this.positions[this.positions.length - 1];
+                        const dt = (latest.time - oldest.time) / 1000;
+                        if (dt > 0) {
+                            this.velocity.subVectors(latest.pos, oldest.pos).multiplyScalar(1 / dt);
+                        }
+                    }
+                }
+
+                // --- 2. Fist Detection via Skeleton Spread ---
+                const mesh = this.el.getObject3D('mesh');
+                if (mesh && mesh.skeleton && mesh.skeleton.bones.length > 0) {
+                    // Bone 0 is universally the wrist in standard XR hand models
+                    const wristWorldPos = new THREE.Vector3().setFromMatrixPosition(mesh.skeleton.bones[0].matrixWorld);
+                    let maxDist = 0;
+                    
+                    // Find the furthest joint from the wrist
+                    for(let i = 1; i < mesh.skeleton.bones.length; i++) {
+                        const bonePos = new THREE.Vector3().setFromMatrixPosition(mesh.skeleton.bones[i].matrixWorld);
+                        const dist = wristWorldPos.distanceTo(bonePos);
+                        if (dist > maxDist) maxDist = dist;
+                    }
+                    
+                    // An open hand has a max spread > 0.15m. A clenched fist is tightly packed (< 0.08m).
+                    this.isFist = (maxDist > 0 && maxDist < 0.085);
+                }
+
+                // --- 3. Handle Currently Grabbed Object ---
+                if (this.grabbedEl) {
+                    // Position the object slightly forward into the pinch area
+                    const offset = new THREE.Vector3(0, -0.05, -0.05);
+                    offset.applyQuaternion(this.el.object3D.quaternion);
+                    const targetPos = this.handPos.clone().add(offset);
+
+                    this.grabbedEl.object3D.position.copy(targetPos);
+                    this.grabbedEl.object3D.quaternion.copy(this.el.object3D.quaternion);
+
+                    // Sync Cannon.js body immediately
+                    const body = this.grabbedEl.components['dynamic-body']?.body;
+                    if (body && body.type === CANNON.Body.KINEMATIC) {
+                        body.position.copy(targetPos);
+                        body.quaternion.copy(this.el.object3D.quaternion);
+                    }
+                    return; // Skip other checks while holding
+                }
+
+                // --- 4. Hover Highlight Logic (Grabbables) ---
+                let closestGrabbable = null;
+                let closestDist = Infinity;
+                const grabbables = document.querySelectorAll('.grabbable');
+
+                grabbables.forEach(el => {
+                    el.object3D.getWorldPosition(this.worldPos);
+                    const dist = this.handPos.distanceTo(this.worldPos);
+                    // 0.15m grab radius
+                    if (dist < 0.15 && dist < closestDist) {
+                        closestGrabbable = el;
+                        closestDist = dist;
+                    }
+                });
+
+                // Clear previous hover state
+                if (this.hoverEl && this.hoverEl !== closestGrabbable) {
+                    if (this.hoverEl.dataset.originalColor) {
+                        this.hoverEl.setAttribute('color', this.hoverEl.dataset.originalColor);
+                    }
+                    this.hoverEl = null;
+                }
+
+                // Apply new hover state
+                if (closestGrabbable && !this.hoverEl) {
+                    this.hoverEl = closestGrabbable;
+                    if (!this.hoverEl.dataset.originalColor) {
+                        this.hoverEl.dataset.originalColor = this.hoverEl.getAttribute('color');
+                    }
+                    this.hoverEl.setAttribute('color', '#aaffaa'); // Highlight light green
+                }
+
+                // --- 5. Break Mechanic (Fist Collision) ---
+                if (this.isFist) {
+                    const breakables = document.querySelectorAll('.breakable');
+                    breakables.forEach(el => {
+                        el.object3D.getWorldPosition(this.worldPos);
+                        // 0.1m strike radius
+                        if (this.handPos.distanceTo(this.worldPos) < 0.1) {
+                            this.triggerBreakEffect(el);
+                        }
+                    });
+                }
+            },
+
+            triggerBreakEffect: function (el) {
+                // Synthesize a Pop Sound to avoid external audio assets
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(400, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.1);
+                    gain.gain.setValueAtTime(1, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.1);
+                } catch(e) { console.warn("Audio not supported or unlocked"); }
+
+                // Gather target properties
+                const pos = el.getAttribute('position');
+                const color = el.getAttribute('color');
+                const scene = document.querySelector('a-scene');
+
+                // Remove the original block
+                el.parentNode.removeChild(el);
+
+                // Spawn small fractured physics blocks
+                for (let i = 0; i < 8; i++) {
+                    const shard = document.createElement('a-box');
+                    shard.setAttribute('width', '0.1');
+                    shard.setAttribute('height', '0.1');
+                    shard.setAttribute('depth', '0.1');
+                    shard.setAttribute('color', color);
+                    shard.setAttribute('shadow', 'cast: true');
+
+                    const offsetX = (Math.random() - 0.5) * 0.2;
+                    const offsetY = (Math.random() - 0.5) * 0.2;
+                    const offsetZ = (Math.random() - 0.5) * 0.2;
+
+                    shard.setAttribute('position', {
+                        x: pos.x + offsetX,
+                        y: pos.y + offsetY,
+                        z: pos.z + offsetZ
+                    });
+
+                    // Set dynamic body
+                    shard.setAttribute('dynamic-body', 'shape: box; mass: 0.2');
+                    scene.appendChild(shard);
+
+                    // Add explosive velocity once the physics body is fully initialized
+                    shard.addEventListener('body-loaded', () => {
+                        const body = shard.components['dynamic-body'].body;
+                        const velocity = new CANNON.Vec3(offsetX * 15, Math.random() * 5 + 2, offsetZ * 15);
+                        body.velocity.copy(velocity);
+                    });
+                    
+                    // Garbage collection for shards
+                    setTimeout(() => {
+                        if (shard.parentNode) shard.parentNode.removeChild(shard);
+                    }, 4000);
+                }
+            }
+        });
+    </script>
+</head>
+<body>
+    <!-- Setup scene with physics and soft shadows -->
+    <a-scene physics="gravity: -9.8; debug: false" shadow="type: pcfsoft" webxr="optionalFeatures: hand-tracking;">
+        
+        <!-- Asset Management (Inline mixing) -->
+        <a-assets>
+            <a-mixin id="grabbable" dynamic-body="shape: box; mass: 1" shadow="cast: true"></a-mixin>
+        </a-assets>
+
+        <!-- Lighting -->
+        <a-entity light="type: ambient; color: #BBB; intensity: 0.6"></a-entity>
+        <a-entity light="type: directional; color: #FFF; intensity: 0.8; castShadow: true; shadowMapHeight: 1024; shadowMapWidth: 1024;" position="-2 4 2"></a-entity>
+
+        <!-- Environment -->
+        <a-sky color="#DDEEFF"></a-sky>
+        
+        <!-- Floor Plane -->
+        <a-plane position="0 0 0" rotation="-90 0 0" width="10" height="10" 
+                 color="#AABBAA" 
+                 shadow="receive: true" 
+                 static-body>
+        </a-plane>
+
+        <!-- Player Rig & Hands -->
+        <a-entity id="rig" position="0 0 1.5">
+            <a-camera position="0 1.6 0"></a-camera>
+            
+            <!-- Left Hand -->
+            <a-entity hand-tracking-controls="hand: left; modelStyle: mesh;" hand-interactions></a-entity>
+            <!-- Right Hand -->
+            <a-entity hand-tracking-controls="hand: right; modelStyle: mesh;" hand-interactions></a-entity>
+        </a-entity>
+
+
+        <!-- ================= SCENE COMPOSITION ================= -->
+
+        <!-- Table 1 (For Grabbing) -->
+        <a-box position="-0.8 0.5 -0.5" width="1.2" height="1" depth="0.6" color="#555" shadow="cast: true; receive: true" static-body></a-box>
+        <a-text value="Pinch to Grab\nRelease to Throw" position="-0.8 1.2 -0.5" align="center" color="#333" scale="0.5 0.5 0.5"></a-text>
+
+        <!-- Grabbable Objects -->
+        <a-box class="grabbable" position="-1.1 1.2 -0.5" width="0.15" height="0.15" depth="0.15" color="#4CC3D9" mixin="grabbable"></a-box>
+        <a-sphere class="grabbable" position="-0.8 1.2 -0.5" radius="0.1" color="#FFC65D" dynamic-body="shape: sphere; mass: 1" shadow="cast: true"></a-sphere>
+        <a-cylinder class="grabbable" position="-0.5 1.2 -0.5" radius="0.08" height="0.2" color="#F16745" dynamic-body="shape: cylinder; mass: 1" shadow="cast: true"></a-cylinder>
+
+
+        <!-- Table 2 (For Punching) -->
+        <a-box position="0.8 0.5 -0.5" width="1.2" height="1" depth="0.6" color="#555" shadow="cast: true; receive: true" static-body></a-box>
+        <a-text value="Make a Fist & Punch\nthe Red Cube" position="0.8 1.4 -0.5" align="center" color="#333" scale="0.5 0.5 0.5"></a-text>
+
+        <!-- Breakable (Target) -->
+        <a-box class="breakable" position="0.6 1.15 -0.5" width="0.2" height="0.2" depth="0.2" color="#EF2D5E" shadow="cast: true" static-body></a-box>
+        
+        <!-- Non-Breakable (Control) -->
+        <a-box class="non-breakable" position="1.0 1.15 -0.5" width="0.2" height="0.2" depth="0.2" color="#888" shadow="cast: true" static-body></a-box>
+
+    </a-scene>
+</body>
+</html>
