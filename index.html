@@ -11,6 +11,68 @@
 
     <script>
         /**
+         * Gesture Movement Component
+         * Moves the player forward (Index) or backward (Thumb)
+         */
+        AFRAME.registerComponent('gesture-movement', {
+            schema: {
+                speed: { type: 'number', default: 2.0 },
+                rig: { type: 'selector', default: '#rig' }
+            },
+            init: function () {
+                this.direction = new THREE.Vector3();
+                this.camDirection = new THREE.Vector3();
+            },
+            tick: function (time, timeDelta) {
+                const mesh = this.el.getObject3D('mesh');
+                if (!mesh || !mesh.skeleton) return;
+
+                const bones = mesh.skeleton.bones;
+                if (bones.length < 25) return;
+
+                // Simple helper to check if a finger is extended
+                // We compare the tip distance from the wrist vs the intermediate joint distance
+                const isExtended = (tipIdx, midIdx) => {
+                    const wrist = new THREE.Vector3().setFromMatrixPosition(bones[0].matrixWorld);
+                    const mid = new THREE.Vector3().setFromMatrixPosition(bones[midIdx].matrixWorld);
+                    const tip = new THREE.Vector3().setFromMatrixPosition(bones[tipIdx].matrixWorld);
+                    return wrist.distanceTo(tip) > wrist.distanceTo(mid);
+                };
+
+                // Standard XR Hand Joint Indices:
+                // Thumb: 4, Index: 9, Middle: 14, Ring: 19, Pinky: 24 (tips)
+                const thumbExt = isExtended(4, 2);
+                const indexExt = isExtended(9, 7);
+                const middleExt = isExtended(14, 12);
+                const ringExt = isExtended(19, 17);
+                const pinkyExt = isExtended(24, 22);
+
+                const onlyIndex = indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
+                const onlyThumb = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt;
+
+                if (onlyIndex || onlyThumb) {
+                    const sceneEl = this.el.sceneEl;
+                    const camera = sceneEl.camera;
+                    camera.getWorldDirection(this.camDirection);
+                    
+                    // Flatten direction to ground plane
+                    this.camDirection.y = 0;
+                    this.camDirection.normalize();
+
+                    const moveStep = (this.data.speed * timeDelta) / 1000;
+                    
+                    if (onlyIndex) {
+                        // Move Forward
+                        this.data.rig.object3D.position.addScaledVector(this.camDirection, moveStep);
+                    } else if (onlyThumb) {
+                        // Move Backward
+                        this.data.rig.object3D.position.addScaledVector(this.camDirection, -moveStep);
+                    }
+                }
+            }
+        });
+
+        /**
          * Hand Interactions Component
          * Handles both Pinch-to-Grab and Fist-to-Break mechanics.
          */
@@ -244,7 +306,7 @@
         <a-sky color="#DDEEFF"></a-sky>
         
         <!-- Floor Plane -->
-        <a-plane position="0 0 0" rotation="-90 0 0" width="10" height="10" 
+        <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" 
                  color="#AABBAA" 
                  shadow="receive: true" 
                  static-body>
@@ -254,18 +316,24 @@
         <a-entity id="rig" position="0 0 1.5">
             <a-camera position="0 1.6 0"></a-camera>
             
-            <!-- Left Hand -->
-            <a-entity hand-tracking-controls="hand: left; modelStyle: mesh;" hand-interactions></a-entity>
-            <!-- Right Hand -->
-            <a-entity hand-tracking-controls="hand: right; modelStyle: mesh;" hand-interactions></a-entity>
+            <!-- Left Hand (Interactions + Movement) -->
+            <a-entity hand-tracking-controls="hand: left; modelStyle: mesh;" hand-interactions gesture-movement></a-entity>
+            <!-- Right Hand (Interactions + Movement) -->
+            <a-entity hand-tracking-controls="hand: right; modelStyle: mesh;" hand-interactions gesture-movement></a-entity>
         </a-entity>
 
 
         <!-- ================= SCENE COMPOSITION ================= -->
 
+        <!-- Instructions Panel -->
+        <a-entity position="0 2.5 -2">
+            <a-text value="GESTURE CONTROLS" align="center" color="#111" position="0 0.4 0"></a-text>
+            <a-text value="Index Only: Move Forward\nThumb Only: Move Backward\nPinch: Grab Objects\nFist: Smash Red Cube" 
+                    align="center" color="#333" scale="0.6 0.6 0.6" position="0 0 0"></a-text>
+        </a-entity>
+
         <!-- Table 1 (For Grabbing) -->
         <a-box position="-0.8 0.5 -0.5" width="1.2" height="1" depth="0.6" color="#555" shadow="cast: true; receive: true" static-body></a-box>
-        <a-text value="Pinch to Grab\nRelease to Throw" position="-0.8 1.2 -0.5" align="center" color="#333" scale="0.5 0.5 0.5"></a-text>
 
         <!-- Grabbable Objects -->
         <a-box class="grabbable" position="-1.1 1.2 -0.5" width="0.15" height="0.15" depth="0.15" color="#4CC3D9" mixin="grabbable"></a-box>
@@ -275,7 +343,6 @@
 
         <!-- Table 2 (For Punching) -->
         <a-box position="0.8 0.5 -0.5" width="1.2" height="1" depth="0.6" color="#555" shadow="cast: true; receive: true" static-body></a-box>
-        <a-text value="Make a Fist & Punch\nthe Red Cube" position="0.8 1.4 -0.5" align="center" color="#333" scale="0.5 0.5 0.5"></a-text>
 
         <!-- Breakable (Target) -->
         <a-box class="breakable" position="0.6 1.15 -0.5" width="0.2" height="0.2" depth="0.2" color="#EF2D5E" shadow="cast: true" static-body></a-box>
