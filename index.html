@@ -80,7 +80,7 @@
             <p>Welcome to stress relief. Break the office!</p>
             <p>🖐 <span class="highlight">Right Hand:</span> <br><strong>Pinch</strong> near an object to grab/throw. <br><strong>Fist</strong> to smash objects.</p>
             <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> to glide. <br>Push away/Pull in to control speed and direction.</p>
-            <p>Locomotion updated: 75% faster and smooth continuous gliding.</p>
+            <p>Locomotion updated: Speed reduced by 50% for better control.</p>
         </div>
         <div id="webxr-button-container"></div>
         <div id="error-msg">WebXR or Hand Tracking not supported on this browser/device.</div>
@@ -367,8 +367,8 @@
 
                 // Lower deadzone for butter-smooth engagement
                 if (Math.abs(thrust) > 0.2) {
-                    // Increase speed by 75% relative to the previous 0.75 multiplier (approx 1.3)
-                    const speedMultiplier = 1.35; 
+                    // Reduce speed by 50% relative to previous multiplier (1.35 * 0.5 = 0.675)
+                    const speedMultiplier = 0.675; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * speedMultiplier);
                     
                     // Smoothly transition current velocity to target
