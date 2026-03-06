@@ -79,8 +79,8 @@
         <div class="instructions">
             <p>Welcome to stress relief. Break the office!</p>
             <p>🖐 <span class="highlight">Right Hand:</span> <br><strong>Pinch</strong> near an object to grab/throw. <br><strong>Fist</strong> to smash objects.</p>
-            <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> and <strong>Push Away</strong> to move forward. <br><strong>Pull Toward</strong> your body to move backward.</p>
-            <p>Sensitivity has been reduced. Max speed is capped to prevent glitches.</p>
+            <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> to glide. <br>Push away/Pull in to control speed and direction.</p>
+            <p>Locomotion updated: 75% faster and smooth continuous gliding.</p>
         </div>
         <div id="webxr-button-container"></div>
         <div id="error-msg">WebXR or Hand Tracking not supported on this browser/device.</div>
@@ -105,6 +105,10 @@
         
         let grabbedObject = null;
         let rightPinchState = false;
+
+        // Locomotion state
+        let playerVelocity = new THREE.Vector3();
+        const FRICTION = 0.92; // Smoothing factor for stopping
 
         const GRAVITY = 9.8;
         const FLOOR_Y = 0;
@@ -153,6 +157,7 @@
             renderer.xr.addEventListener('sessionend', () => {
                 document.getElementById('ui-container').style.display = 'flex';
                 dolly.position.set(0, 0, 3);
+                playerVelocity.set(0, 0, 0);
             });
 
             buildRoom();
@@ -337,11 +342,8 @@
                 
                 const currentVel = new THREE.Vector3().subVectors(wPos, hand.userData.prevPos).divideScalar(dt);
                 
-                // IGNORE GLITCHY VELOCITY: If hand moves > 8m/s, it's a tracking jump, ignore it.
-                if (currentVel.lengthSq() < 64) {
-                    hand.userData.velocity.lerp(currentVel, 0.1); 
-                }
-                
+                // Processing velocities with smoothing
+                hand.userData.velocity.lerp(currentVel, 0.2); 
                 hand.userData.prevPos.copy(wPos);
 
                 const palmNormal = new THREE.Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
@@ -350,10 +352,10 @@
                 headsetForward.y = 0;
                 headsetForward.normalize();
                 
-                hand.userData.isPalmShowing = Math.abs(palmNormal.dot(headsetForward)) > 0.65;
+                hand.userData.isPalmShowing = Math.abs(palmNormal.dot(headsetForward)) > 0.55;
             });
 
-            // --- MOVEMENT: Both Palms ---
+            // --- SMOOTH CONTINUOUS MOVEMENT: Both Palms ---
             if (leftHandObj && rightHandObj && leftHandObj.userData.isPalmShowing && rightHandObj.userData.isPalmShowing) {
                 const headsetForward = new THREE.Vector3();
                 camera.getWorldDirection(headsetForward);
@@ -363,17 +365,27 @@
                 const avgVel = new THREE.Vector3().addVectors(leftHandObj.userData.velocity, rightHandObj.userData.velocity).multiplyScalar(0.5);
                 let thrust = avgVel.dot(headsetForward);
 
-                // REDUCED SENSITIVITY & HALVED SPEED
-                // 1. Higher deadzone (ignore small jitters)
-                if (Math.abs(thrust) > 0.7) {
-                    // 2. Cap max move speed to 1.5m/s (halved from before)
-                    thrust = Math.sign(thrust) * Math.min(Math.abs(thrust), 1.5);
-                    const speedMultiplier = 0.6; // Halved from 1.2
-                    dolly.position.addScaledVector(headsetForward, thrust * dt * speedMultiplier);
+                // Lower deadzone for butter-smooth engagement
+                if (Math.abs(thrust) > 0.2) {
+                    // Increase speed by 75% relative to the previous 0.75 multiplier (approx 1.3)
+                    const speedMultiplier = 1.35; 
+                    const targetVel = headsetForward.clone().multiplyScalar(thrust * speedMultiplier);
+                    
+                    // Smoothly transition current velocity to target
+                    playerVelocity.lerp(targetVel, 0.1);
+                } else {
+                    // Apply friction when hands are still but showing palms
+                    playerVelocity.multiplyScalar(FRICTION);
                 }
+            } else {
+                // Apply friction when palms are hidden to stop glide
+                playerVelocity.multiplyScalar(FRICTION);
             }
+
+            // Apply calculated velocity to dolly
+            dolly.position.addScaledVector(playerVelocity, dt * 10);
             
-            // RIGID BOUNDARY FOR PLAYER: Never let dolly leave the room
+            // RIGID BOUNDARY FOR PLAYER
             const playerLimit = ROOM_SIZE - 0.5;
             dolly.position.x = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.x));
             dolly.position.z = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.z));
