@@ -107,7 +107,7 @@
         const interactables = [];
         const clock = new THREE.Clock();
         const raycaster = new THREE.Raycaster();
-        raycaster.firstHitOnly = true; // BVH optimization
+        raycaster.firstHitOnly = true; 
         
         // Visualizers
         let pointerLine;
@@ -117,8 +117,9 @@
         // Physics constants
         const GRAVITY = 9.8;
         const FLOOR_Y = 0;
+        const ROOM_SIZE = 7.5; // Half of the 15x15 room
 
-        // Temporary math objects to avoid GC overhead in loop
+        // Temporary math objects to avoid GC overhead
         const tempVec1 = new THREE.Vector3();
         const tempVec2 = new THREE.Vector3();
         const tempBox1 = new THREE.Box3();
@@ -128,26 +129,22 @@
         animate();
 
         function init() {
-            // 1. Scene Setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x222222);
 
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 50);
             
-            // Dolly for locomotion
             dolly = new THREE.Group();
-            dolly.position.set(0, 0, 3); // Start slightly back in the room
+            dolly.position.set(0, 0, 3);
             scene.add(dolly);
             dolly.add(camera);
 
-            // Lighting
             scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.8));
             const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
             dirLight.position.set(5, 10, 5);
             dirLight.castShadow = true;
             scene.add(dirLight);
 
-            // Renderer Setup
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -155,44 +152,33 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // VR Button Setup with Hand Tracking requirements
             const vrButton = VRButton.createButton(renderer, {
                 requiredFeatures: ['hand-tracking', 'local-floor']
             });
             document.getElementById('webxr-button-container').appendChild(vrButton);
 
-            // Hide UI on session start
             renderer.xr.addEventListener('sessionstart', () => {
                 document.getElementById('ui-container').style.display = 'none';
             });
             renderer.xr.addEventListener('sessionend', () => {
                 document.getElementById('ui-container').style.display = 'flex';
-                // Reset dolly position
                 dolly.position.set(0, 0, 3);
             });
 
-            // 2. Build Environment
             buildRoom();
             buildObjects();
-
-            // 3. Hand Tracking Setup
             setupHands();
 
-            // Pointer line for left hand raycast
             const lineMat = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.7 });
             const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
             pointerLine = new THREE.Line(lineGeo, lineMat);
             pointerLine.visible = false;
             scene.add(pointerLine);
 
-            // Window Resize
             window.addEventListener('resize', onWindowResize);
         }
 
-        // --- Environment Construction ---
-
         function buildRoom() {
-            // Floor
             const floorGeo = new THREE.PlaneGeometry(15, 15);
             const floorMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.8 });
             const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -200,18 +186,21 @@
             floor.receiveShadow = true;
             scene.add(floor);
 
-            // Grid helper for floor texture
             const grid = new THREE.GridHelper(15, 30, 0x333333, 0x333333);
             grid.position.y = 0.01;
             scene.add(grid);
 
-            // Walls (Basic pale color)
             const wallMat = new THREE.MeshStandardMaterial({ color: 0xd0d0d0 });
             const wallGeo = new THREE.PlaneGeometry(15, 5);
             
             const backWall = new THREE.Mesh(wallGeo, wallMat);
             backWall.position.set(0, 2.5, -7.5);
             scene.add(backWall);
+
+            const frontWall = new THREE.Mesh(wallGeo, wallMat);
+            frontWall.position.set(0, 2.5, 7.5);
+            frontWall.rotation.y = Math.PI;
+            scene.add(frontWall);
 
             const leftWall = new THREE.Mesh(wallGeo, wallMat);
             leftWall.position.set(-7.5, 2.5, 0);
@@ -225,14 +214,11 @@
         }
 
         function createPhysicsMesh(geometry, material, type, mass = 1, isGrabbable = true) {
-            // Compute BVH for raycasting
             geometry.computeBoundsTree();
-            
             const mesh = new THREE.Mesh(geometry, material);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             
-            // Initialize physics metadata
             mesh.userData = {
                 type: type,
                 mass: mass,
@@ -241,16 +227,14 @@
                 broken: false,
                 velocity: new THREE.Vector3(),
                 angularVelocity: new THREE.Vector3(),
-                radius: 0.5 // Default, will compute exact bounds on first break check
+                radius: 0.5 
             };
 
-            // Calculate rough bounding sphere for simple collisions
             mesh.geometry.computeBoundingSphere();
             if(mesh.geometry.boundingSphere) {
                 mesh.userData.radius = mesh.geometry.boundingSphere.radius;
             }
 
-            // Break Logic
             mesh.userData.break = function() {
                 if (this.broken) return;
                 
@@ -259,17 +243,14 @@
                 }
 
                 if (this.type === 'boss') {
-                    // Turn boss red, apply strong random force
                     this.material.color.setHex(0xff0000);
                     this.velocity.set((Math.random()-0.5)*5, 3, (Math.random()-0.5)*5);
                     this.angularVelocity.set(Math.random()*10, Math.random()*10, Math.random()*10);
                 } 
                 else if (this.type === 'laptop') {
-                    // Turn black/smoky, pop up
                     this.material.color.setHex(0x111111);
                     this.velocity.set((Math.random()-0.5)*2, 4, (Math.random()-0.5)*2);
                     this.angularVelocity.set(Math.random()*8, Math.random()*8, 0);
-                    // Shrink simulation
                     const shrinkInterval = setInterval(() => {
                         if(this.scale.x > 0.1) this.scale.multiplyScalar(0.9);
                         else clearInterval(shrinkInterval);
@@ -280,7 +261,6 @@
                     this.angularVelocity.set(Math.random()*5, 0, Math.random()*5);
                 }
                 else if (this.type === 'table') {
-                    // Just nudge it
                     this.velocity.set((Math.random()-0.5)*1, 0.5, (Math.random()-0.5)*1);
                 }
             };
@@ -291,23 +271,19 @@
         }
 
         function buildObjects() {
-            // Materials
             const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
             const silverMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.6, roughness: 0.4 });
             const chairMat = new THREE.MeshStandardMaterial({ color: 0x2255aa });
             const bossMat = new THREE.MeshStandardMaterial({ color: 0xddcbaa });
             const toolMat = new THREE.MeshStandardMaterial({ color: 0x882222 });
 
-            // 1. Tables
             const tableGeo = new THREE.BoxGeometry(2, 0.1, 1);
-            // Construct compound-like table out of one merged geo for simplicity or just a thick slab
             const table1 = createPhysicsMesh(tableGeo, woodMat, 'table', 50, false);
             table1.position.set(-1.5, 0.8, -1.5);
             
             const table2 = createPhysicsMesh(tableGeo, woodMat, 'table', 50, false);
             table2.position.set(1.5, 0.8, -1.5);
 
-            // Add simple legs (Visual only to keep physics simple, attached to scene, not interactable)
             const legGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
             const addLegs = (tableX, tableZ) => {
                 const offsets = [[-0.9, -0.4], [0.9, -0.4], [-0.9, 0.4], [0.9, 0.4]];
@@ -320,7 +296,6 @@
             addLegs(-1.5, -1.5);
             addLegs(1.5, -1.5);
 
-            // 2. Laptops (3 per table)
             const laptopGeo = new THREE.BoxGeometry(0.35, 0.03, 0.25);
             for(let i=0; i<6; i++) {
                 const laptop = createPhysicsMesh(laptopGeo.clone(), silverMat.clone(), 'laptop', 2);
@@ -329,14 +304,12 @@
                 laptop.position.set(baseX + (i%3)*0.7, 0.9, -1.5 + (Math.random()-0.5)*0.2);
                 laptop.rotation.y = (Math.random() - 0.5);
                 
-                // Add Screen visually
                 const screen = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.02), silverMat);
                 screen.position.set(0, 0.12, -0.12);
                 screen.rotation.x = -0.2;
-                laptop.add(screen); // Parent screen to laptop body
+                laptop.add(screen);
             }
 
-            // 3. Chairs
             const chairSeatGeo = new THREE.BoxGeometry(0.5, 0.1, 0.5);
             const positions = [[-1.5, -0.5], [1.5, -0.5], [0, -2]];
             positions.forEach(pos => {
@@ -352,10 +325,9 @@
                 chair.add(leg);
             });
 
-            // 4. Boss (Humanoid figure)
             const bossGeo = new THREE.BoxGeometry(0.6, 1.2, 0.4);
             const boss = createPhysicsMesh(bossGeo, bossMat.clone(), 'boss', 20);
-            boss.position.set(0, 0.6, -3); // Standing near back wall
+            boss.position.set(0, 0.6, -3);
 
             const head = new THREE.Mesh(new THREE.SphereGeometry(0.25), bossMat);
             head.position.set(0, 0.8, 0);
@@ -365,9 +337,7 @@
             const lArm = new THREE.Mesh(armGeo, bossMat); lArm.position.set(-0.4, 0.2, 0); boss.add(lArm);
             const rArm = new THREE.Mesh(armGeo, bossMat); rArm.position.set(0.4, 0.2, 0); boss.add(rArm);
 
-            // 5. Tools (Breakables)
-            // Hammer
-            const hammerGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.5); // handle
+            const hammerGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.5);
             const hammer = createPhysicsMesh(hammerGeo, woodMat.clone(), 'tool', 8);
             hammer.position.set(-0.5, 1.0, -0.5);
             hammer.rotation.x = Math.PI/2;
@@ -375,14 +345,12 @@
             hammerHead.position.set(0, 0.25, 0);
             hammer.add(hammerHead);
 
-            // Baseball Bat
             const batGeo = new THREE.CylinderGeometry(0.05, 0.02, 0.8);
             const bat = createPhysicsMesh(batGeo, woodMat.clone(), 'tool', 6);
             bat.position.set(0.5, 1.0, -0.5);
             bat.rotation.z = Math.PI/2;
-            bat.material.color.setHex(0xd2b48c); // lighter wood
+            bat.material.color.setHex(0xd2b48c);
 
-            // Hockey Stick
             const stickGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.0);
             const stick = createPhysicsMesh(stickGeo, toolMat.clone(), 'tool', 5);
             stick.position.set(0, 1.0, -0.5);
@@ -393,8 +361,6 @@
             stick.add(blade);
         }
 
-        // --- WebXR Hand Tracking Setup ---
-        
         function setupHands() {
             handModelFactory = new XRHandModelFactory();
 
@@ -404,17 +370,14 @@
             dolly.add(hand1);
             dolly.add(hand2);
 
-            // Add standard visual models (semi-transparent so joints are visible)
             const handMesh1 = handModelFactory.createHandModel(hand1, 'mesh');
             const handMesh2 = handModelFactory.createHandModel(hand2, 'mesh');
             hand1.add(handMesh1);
             hand2.add(handMesh2);
 
-            // Add custom data storage
             hand1.userData = { prevPos: new THREE.Vector3() };
             hand2.userData = { prevPos: new THREE.Vector3() };
 
-            // Listen for connection to identify left/right
             const onHandConnect = (event) => {
                 const hand = event.target;
                 hand.handedness = event.data.handedness;
@@ -426,41 +389,48 @@
             hand2.addEventListener('connected', onHandConnect);
         }
 
-        // --- Core Logic Loop ---
-
         function updatePhysics(dt) {
             interactables.forEach(obj => {
-                if (obj.userData.grabbed) return; // Skip grabbed objects
+                if (obj.userData.grabbed) return;
 
-                // 1. Apply Gravity
+                // Max velocity cap to prevent objects glitching completely out
+                if (obj.userData.velocity.lengthSq() > 400) {
+                    obj.userData.velocity.normalize().multiplyScalar(20);
+                }
+
+                // Apply Gravity & Velocity
                 obj.userData.velocity.y -= GRAVITY * dt;
-
-                // 2. Apply Velocity
                 obj.position.addScaledVector(obj.userData.velocity, dt);
 
-                // 3. Apply Angular Velocity
                 obj.rotation.x += obj.userData.angularVelocity.x * dt;
                 obj.rotation.y += obj.userData.angularVelocity.y * dt;
                 obj.rotation.z += obj.userData.angularVelocity.z * dt;
 
-                // 4. Floor Collision
-                if (obj.position.y < FLOOR_Y + obj.userData.radius) {
-                    obj.position.y = FLOOR_Y + obj.userData.radius;
+                const radius = obj.userData.radius || 0.2;
+
+                // 1. Floor Collision
+                if (obj.position.y < FLOOR_Y + radius) {
+                    obj.position.y = FLOOR_Y + radius;
                     obj.userData.velocity.y *= -0.4; // Bounce
                     
-                    // Friction
                     obj.userData.velocity.x *= 0.8;
                     obj.userData.velocity.z *= 0.8;
                     obj.userData.angularVelocity.multiplyScalar(0.8);
 
-                    // Sleep threshold
                     if (obj.userData.velocity.lengthSq() < 0.05) {
                         obj.userData.velocity.set(0,0,0);
                     }
                 }
 
-                // 5. Tool Smashing Logic (If it's a tool and moving fast, break things it hits)
-                const isFast = obj.userData.velocity.lengthSq() > 9; // speed > 3
+                // 2. Wall Collision (Bounce objects off the room walls)
+                const boundsLimit = ROOM_SIZE - radius;
+                if (obj.position.x > boundsLimit) { obj.position.x = boundsLimit; obj.userData.velocity.x *= -0.5; }
+                if (obj.position.x < -boundsLimit) { obj.position.x = -boundsLimit; obj.userData.velocity.x *= -0.5; }
+                if (obj.position.z > boundsLimit) { obj.position.z = boundsLimit; obj.userData.velocity.z *= -0.5; }
+                if (obj.position.z < -boundsLimit) { obj.position.z = -boundsLimit; obj.userData.velocity.z *= -0.5; }
+
+                // 3. Tool Smashing Logic
+                const isFast = obj.userData.velocity.lengthSq() > 9;
                 const isGrabbedAndSwung = obj.userData.type === 'tool' && obj.userData.grabbed && leftHandSpeed > 2.0;
                 
                 if ((obj.userData.type === 'tool' && (isFast || isGrabbedAndSwung)) || (obj.userData.type === 'boss' && isFast)) {
@@ -470,7 +440,6 @@
                         tempBox2.setFromObject(target);
                         if (tempBox1.intersectsBox(tempBox2)) {
                             target.userData.break();
-                            // Deflect the tool slightly
                             obj.userData.velocity.multiplyScalar(0.5);
                         }
                     });
@@ -479,7 +448,7 @@
         }
 
         function handleGestures(dt) {
-            // --- LEFT HAND: Utility (Grab / Throw / Tool Handle) ---
+            // --- LEFT HAND: Utility (Grab / Throw) ---
             if (leftHandObj && leftHandObj.joints && leftHandObj.joints['wrist']) {
                 const indexTip = leftHandObj.joints['index-finger-tip'];
                 const thumbTip = leftHandObj.joints['thumb-tip'];
@@ -491,7 +460,6 @@
                     tempVec2.setFromMatrixPosition(thumbTip.matrixWorld);
                     const pinchDist = tempVec1.distanceTo(tempVec2);
                     
-                    // Track Hand Velocity for throwing and smashing
                     const wristPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
                     const vel = new THREE.Vector3().subVectors(wristPos, leftHandObj.userData.prevPos).divideScalar(dt);
                     leftHandSpeed = vel.length();
@@ -500,7 +468,6 @@
                     const isPinching = pinchDist < 0.025;
 
                     if (isPinching && !leftPinchState && !grabbedObject) {
-                        // START GRAB: Raycast from index finger
                         const rayOrigin = tempVec1.clone();
                         const basePos = new THREE.Vector3().setFromMatrixPosition(indexBase.matrixWorld);
                         const rayDir = new THREE.Vector3().subVectors(rayOrigin, basePos).normalize();
@@ -512,21 +479,16 @@
                             grabbedObject = intersects[0].object;
                             if (grabbedObject.userData.grabbable) {
                                 grabbedObject.userData.grabbed = true;
-                                // Reset velocities
                                 grabbedObject.userData.velocity.set(0,0,0);
                                 grabbedObject.userData.angularVelocity.set(0,0,0);
                             } else {
-                                grabbedObject = null; // Can't grab tables
+                                grabbedObject = null;
                             }
                         }
                     } 
                     else if (!isPinching && leftPinchState && grabbedObject) {
-                        // RELEASE GRAB: Throw
                         grabbedObject.userData.grabbed = false;
-                        // Apply throw velocity (scaled up slightly for fun)
                         grabbedObject.userData.velocity.copy(vel).multiplyScalar(1.5);
-                        
-                        // Add some spin
                         grabbedObject.userData.angularVelocity.set(
                             (Math.random()-0.5)*10,
                             (Math.random()-0.5)*10,
@@ -535,18 +497,13 @@
                         grabbedObject = null;
                     }
 
-                    // HOLD OBJECT
                     if (grabbedObject) {
                         const holdPos = new THREE.Vector3().setFromMatrixPosition(indexBase.matrixWorld);
-                        // Move object towards hand smoothly
                         grabbedObject.position.lerp(holdPos, 0.4);
-                        
-                        // Align rotation roughly with hand
                         const handQuat = new THREE.Quaternion().setFromRotationMatrix(indexBase.matrixWorld);
                         grabbedObject.quaternion.slerp(handQuat, 0.3);
                     }
 
-                    // Update Visual Pointer
                     if (!grabbedObject) {
                         pointerLine.visible = true;
                         const rayOrigin = tempVec1.clone();
@@ -554,7 +511,6 @@
                         const rayDir = new THREE.Vector3().subVectors(rayOrigin, basePos).normalize();
                         
                         pointerLine.position.copy(rayOrigin);
-                        // Orient line to ray direction
                         const targetPos = rayOrigin.clone().add(rayDir);
                         pointerLine.lookAt(targetPos);
                     } else {
@@ -570,20 +526,16 @@
                 const wrist = rightHandObj.joints['wrist'];
                 const wPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
 
-                // Track Right Hand Velocity
                 const vel = new THREE.Vector3().subVectors(wPos, rightHandObj.userData.prevPos).divideScalar(dt);
                 rightHandSpeed = vel.length();
                 rightHandObj.userData.prevPos.copy(wPos);
 
-                // 1. Smash Detection (Fist)
                 const middleTip = rightHandObj.joints['middle-finger-tip'];
                 if (middleTip) {
                     tempVec1.setFromMatrixPosition(middleTip.matrixWorld);
-                    // If fingertips are close to wrist/palm, it's a fist
                     const isFist = wPos.distanceTo(tempVec1) < 0.1;
 
-                    if (isFist && rightHandSpeed > 1.0) { // Fist is clenched and moving
-                        // Create a hit box around the fist
+                    if (isFist && rightHandSpeed > 1.0) { 
                         tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.15, 0.15, 0.15));
                         
                         interactables.forEach(obj => {
@@ -595,32 +547,33 @@
                         });
                     }
 
-                    // 2. Locomotion (Palm based)
                     if (!isFist) {
-                        // Get Hand normal (roughly outward from palm)
-                        // Using wrist quaternion, Y axis often points out of back of hand, -Y out of palm
                         const palmNormal = new THREE.Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
                         
-                        // Get Headset forward (locked to XZ plane)
                         const headsetForward = new THREE.Vector3();
                         camera.getWorldDirection(headsetForward);
                         headsetForward.y = 0;
                         headsetForward.normalize();
 
-                        // Determine gesture intent based on palm direction and hand movement velocity
                         const isFacingAway = palmNormal.dot(headsetForward) > 0.5;
                         const isFacingToward = palmNormal.dot(headsetForward) < -0.5;
                         
-                        const thrustSpeed = vel.dot(headsetForward);
+                        // CLAMP LOCMOMOTION SPEED to prevent tracking glitches from teleporting player
+                        const rawThrust = vel.dot(headsetForward);
+                        const thrustSpeed = Math.max(-3.0, Math.min(3.0, rawThrust)); 
 
-                        // Move forward: Palm faces away AND hand pushes away (positive thrust)
                         if (isFacingAway && thrustSpeed > 0.3) {
-                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 1.5);
+                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 2.0);
                         }
-                        // Move backward: Palm faces toward AND hand pulls toward (negative thrust)
                         else if (isFacingToward && thrustSpeed < -0.3) {
-                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 1.5);
+                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 2.0);
                         }
+
+                        // BOUNDARY LIMITS FOR THE PLAYER
+                        // Don't let the camera move outside the walls
+                        const playerLimit = ROOM_SIZE - 0.5; 
+                        dolly.position.x = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.x));
+                        dolly.position.z = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.z));
                     }
                 }
             }
@@ -637,9 +590,8 @@
         }
 
         function render() {
-            const dt = Math.min(clock.getDelta(), 0.1); // Cap delta to prevent huge jumps
+            const dt = Math.min(clock.getDelta(), 0.1); 
 
-            // Only run interactions and physics if in VR
             if (renderer.xr.isPresenting) {
                 handleGestures(dt);
                 updatePhysics(dt);
@@ -648,7 +600,6 @@
             renderer.render(scene, camera);
         }
 
-        // Quick check for basic WebXR support to show error message gracefully
         if ('xr' in navigator) {
             navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
                 if (!supported) {
