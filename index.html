@@ -79,8 +79,8 @@
         <div class="instructions">
             <p>Welcome to stress relief. Break the office!</p>
             <p>🖐 <span class="highlight">Right Hand:</span> <br><strong>Pinch</strong> near an object to grab/throw. <br><strong>Fist</strong> to smash objects.</p>
-            <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> to glide. <br>Push away/Pull in to control speed and direction.</p>
-            <p>Locomotion updated: Speed reduced by 50% for better control.</p>
+            <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> to walk. <br>Push away/Pull in to control speed and direction.</p>
+            <p>Locomotion updated: Realistic human walking speed.</p>
         </div>
         <div id="webxr-button-container"></div>
         <div id="error-msg">WebXR or Hand Tracking not supported on this browser/device.</div>
@@ -106,9 +106,10 @@
         let grabbedObject = null;
         let rightPinchState = false;
 
-        // Locomotion state
+        // Locomotion state - Tuned for human-like walking
         let playerVelocity = new THREE.Vector3();
-        const FRICTION = 0.92; // Smoothing factor for stopping
+        const FRICTION = 0.85; // Slightly higher friction for more "weighted" stops
+        const ACCELERATION_SMOOTHING = 0.08; // How fast you reach walk speed
 
         const GRAVITY = 9.8;
         const FLOOR_Y = 0;
@@ -352,10 +353,11 @@
                 headsetForward.y = 0;
                 headsetForward.normalize();
                 
+                // Palm detection logic
                 hand.userData.isPalmShowing = Math.abs(palmNormal.dot(headsetForward)) > 0.55;
             });
 
-            // --- SMOOTH CONTINUOUS MOVEMENT: Both Palms ---
+            // --- REALISTIC HUMAN WALKING SPEED: Both Palms ---
             if (leftHandObj && rightHandObj && leftHandObj.userData.isPalmShowing && rightHandObj.userData.isPalmShowing) {
                 const headsetForward = new THREE.Vector3();
                 camera.getWorldDirection(headsetForward);
@@ -365,24 +367,22 @@
                 const avgVel = new THREE.Vector3().addVectors(leftHandObj.userData.velocity, rightHandObj.userData.velocity).multiplyScalar(0.5);
                 let thrust = avgVel.dot(headsetForward);
 
-                // Lower deadzone for butter-smooth engagement
-                if (Math.abs(thrust) > 0.2) {
-                    // Reduce speed by 50% relative to previous multiplier (1.35 * 0.5 = 0.675)
-                    const speedMultiplier = 0.675; 
-                    const targetVel = headsetForward.clone().multiplyScalar(thrust * speedMultiplier);
+                if (Math.abs(thrust) > 0.15) {
+                    // Walk speed multiplier (~1.4m/s typical human speed)
+                    // Adjusted for the scale of the virtual environment
+                    const humanWalkMultiplier = 0.15; 
+                    const targetVel = headsetForward.clone().multiplyScalar(thrust * humanWalkMultiplier);
                     
-                    // Smoothly transition current velocity to target
-                    playerVelocity.lerp(targetVel, 0.1);
+                    // Smoothly transition to walking speed
+                    playerVelocity.lerp(targetVel, ACCELERATION_SMOOTHING);
                 } else {
-                    // Apply friction when hands are still but showing palms
                     playerVelocity.multiplyScalar(FRICTION);
                 }
             } else {
-                // Apply friction when palms are hidden to stop glide
                 playerVelocity.multiplyScalar(FRICTION);
             }
 
-            // Apply calculated velocity to dolly
+            // Apply calculated walking velocity
             dolly.position.addScaledVector(playerVelocity, dt * 10);
             
             // RIGID BOUNDARY FOR PLAYER
@@ -407,6 +407,7 @@
                     const isPinching = pinchDist < 0.035;
                     const isFist = wPos.distanceTo(mPos) < 0.12;
 
+                    // Crushing objects with a punch
                     if (isFist && rightHandObj.userData.velocity.length() > 1.2) {
                         tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.25, 0.25, 0.25));
                         interactables.forEach(obj => {
@@ -416,6 +417,7 @@
                         });
                     }
 
+                    // Grabbing objects with a pinch
                     if (isPinching && !rightPinchState && !grabbedObject) {
                         let closest = null;
                         let minDist = 0.35; 
