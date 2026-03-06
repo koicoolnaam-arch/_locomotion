@@ -78,13 +78,13 @@
     <div id="ui-container">
         <h1>Rage Room Office</h1>
         <div class="instructions">
-            <p>Welcome to the ultimate stress relief. Break the office!</p>
-            <p>🖐 <span class="highlight">Left Hand:</span> <br><strong>Pinch</strong> to aim and grab/throw objects (Raycast).</p>
-            <p>👊 <span class="highlight-red">Right Hand (Smash & Move):</span> <br><strong>Fist</strong> to smash objects. <br><strong>Palm outward + Push away</strong> to move forward. <br><strong>Palm inward + Pull toward</strong> to move backward.</p>
-            <p>Tools (Hammer, Bat) held in the left hand can also smash things when swung!</p>
+            <p>Welcome to stress relief. Break the office!</p>
+            <p>🖐 <span class="highlight">Right Hand:</span> <br><strong>Pinch</strong> near an object to grab/throw. <br><strong>Fist</strong> to smash objects.</p>
+            <p>👐 <span class="highlight-red">Movement (Both Palms):</span> <br>Show <strong>Both Palms</strong> and <strong>Push Away</strong> to move forward. <br><strong>Pull Toward</strong> your body to move backward.</p>
+            <p>Sensitivity has been reduced for smoother control.</p>
         </div>
         <div id="webxr-button-container"></div>
-        <div id="error-msg">WebXR or Hand Tracking not supported on this browser/device. Please use Meta Quest Browser or Chrome on Android with ARCore.</div>
+        <div id="error-msg">WebXR or Hand Tracking not supported on this browser/device.</div>
     </div>
 
     <script type="module">
@@ -102,24 +102,19 @@
         let scene, camera, renderer, dolly;
         let hand1, hand2, handModelFactory;
         let leftHandObj = null, rightHandObj = null;
-        let leftHandSpeed = 0, rightHandSpeed = 0;
         
         const interactables = [];
         const clock = new THREE.Clock();
-        const raycaster = new THREE.Raycaster();
-        raycaster.firstHitOnly = true; 
         
-        // Visualizers
-        let pointerLine;
         let grabbedObject = null;
-        let leftPinchState = false;
+        let rightPinchState = false;
 
         // Physics constants
         const GRAVITY = 9.8;
         const FLOOR_Y = 0;
-        const ROOM_SIZE = 7.5; // Half of the 15x15 room
+        const ROOM_SIZE = 7.5; 
 
-        // Temporary math objects to avoid GC overhead
+        // Temporary math objects
         const tempVec1 = new THREE.Vector3();
         const tempVec2 = new THREE.Vector3();
         const tempBox1 = new THREE.Box3();
@@ -169,12 +164,6 @@
             buildObjects();
             setupHands();
 
-            const lineMat = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.7 });
-            const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
-            pointerLine = new THREE.Line(lineGeo, lineMat);
-            pointerLine.visible = false;
-            scene.add(pointerLine);
-
             window.addEventListener('resize', onWindowResize);
         }
 
@@ -193,24 +182,18 @@
             const wallMat = new THREE.MeshStandardMaterial({ color: 0xd0d0d0 });
             const wallGeo = new THREE.PlaneGeometry(15, 5);
             
-            const backWall = new THREE.Mesh(wallGeo, wallMat);
-            backWall.position.set(0, 2.5, -7.5);
-            scene.add(backWall);
-
-            const frontWall = new THREE.Mesh(wallGeo, wallMat);
-            frontWall.position.set(0, 2.5, 7.5);
-            frontWall.rotation.y = Math.PI;
-            scene.add(frontWall);
-
-            const leftWall = new THREE.Mesh(wallGeo, wallMat);
-            leftWall.position.set(-7.5, 2.5, 0);
-            leftWall.rotation.y = Math.PI / 2;
-            scene.add(leftWall);
-
-            const rightWall = new THREE.Mesh(wallGeo, wallMat);
-            rightWall.position.set(7.5, 2.5, 0);
-            rightWall.rotation.y = -Math.PI / 2;
-            scene.add(rightWall);
+            const wallPos = [
+                {p: [0, 2.5, -7.5], r: [0, 0, 0]},
+                {p: [0, 2.5, 7.5], r: [0, Math.PI, 0]},
+                {p: [-7.5, 2.5, 0], r: [0, Math.PI / 2, 0]},
+                {p: [7.5, 2.5, 0], r: [0, -Math.PI / 2, 0]}
+            ];
+            wallPos.forEach(w => {
+                const wall = new THREE.Mesh(wallGeo, wallMat);
+                wall.position.set(...w.p);
+                wall.rotation.set(...w.r);
+                scene.add(wall);
+            });
         }
 
         function createPhysicsMesh(geometry, material, type, mass = 1, isGrabbable = true) {
@@ -237,31 +220,18 @@
 
             mesh.userData.break = function() {
                 if (this.broken) return;
-                
-                if (this.type !== 'table') {
-                    this.broken = true;
-                }
+                if (this.type !== 'table') this.broken = true;
 
                 if (this.type === 'boss') {
                     this.material.color.setHex(0xff0000);
-                    this.velocity.set((Math.random()-0.5)*5, 3, (Math.random()-0.5)*5);
-                    this.angularVelocity.set(Math.random()*10, Math.random()*10, Math.random()*10);
+                    this.velocity.set((Math.random()-0.5)*3, 2, (Math.random()-0.5)*3);
                 } 
                 else if (this.type === 'laptop') {
                     this.material.color.setHex(0x111111);
-                    this.velocity.set((Math.random()-0.5)*2, 4, (Math.random()-0.5)*2);
-                    this.angularVelocity.set(Math.random()*8, Math.random()*8, 0);
-                    const shrinkInterval = setInterval(() => {
-                        if(this.scale.x > 0.1) this.scale.multiplyScalar(0.9);
-                        else clearInterval(shrinkInterval);
-                    }, 50);
+                    this.velocity.set((Math.random()-0.5)*2, 3, (Math.random()-0.5)*2);
                 }
                 else if (this.type === 'chair') {
-                    this.velocity.set((Math.random()-0.5)*4, 2, (Math.random()-0.5)*4);
-                    this.angularVelocity.set(Math.random()*5, 0, Math.random()*5);
-                }
-                else if (this.type === 'table') {
-                    this.velocity.set((Math.random()-0.5)*1, 0.5, (Math.random()-0.5)*1);
+                    this.velocity.set((Math.random()-0.5)*2, 1.5, (Math.random()-0.5)*2);
                 }
             };
 
@@ -275,90 +245,31 @@
             const silverMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.6, roughness: 0.4 });
             const chairMat = new THREE.MeshStandardMaterial({ color: 0x2255aa });
             const bossMat = new THREE.MeshStandardMaterial({ color: 0xddcbaa });
-            const toolMat = new THREE.MeshStandardMaterial({ color: 0x882222 });
 
+            // Tables
             const tableGeo = new THREE.BoxGeometry(2, 0.1, 1);
-            const table1 = createPhysicsMesh(tableGeo, woodMat, 'table', 50, false);
-            table1.position.set(-1.5, 0.8, -1.5);
-            
-            const table2 = createPhysicsMesh(tableGeo, woodMat, 'table', 50, false);
-            table2.position.set(1.5, 0.8, -1.5);
-
-            const legGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
-            const addLegs = (tableX, tableZ) => {
-                const offsets = [[-0.9, -0.4], [0.9, -0.4], [-0.9, 0.4], [0.9, 0.4]];
-                offsets.forEach(off => {
-                    const leg = new THREE.Mesh(legGeo, woodMat);
-                    leg.position.set(tableX + off[0], 0.4, tableZ + off[1]);
-                    scene.add(leg);
-                });
-            };
-            addLegs(-1.5, -1.5);
-            addLegs(1.5, -1.5);
-
-            const laptopGeo = new THREE.BoxGeometry(0.35, 0.03, 0.25);
-            for(let i=0; i<6; i++) {
-                const laptop = createPhysicsMesh(laptopGeo.clone(), silverMat.clone(), 'laptop', 2);
-                const isTable1 = i < 3;
-                const baseX = isTable1 ? -2.2 : 0.8;
-                laptop.position.set(baseX + (i%3)*0.7, 0.9, -1.5 + (Math.random()-0.5)*0.2);
-                laptop.rotation.y = (Math.random() - 0.5);
-                
-                const screen = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.02), silverMat);
-                screen.position.set(0, 0.12, -0.12);
-                screen.rotation.x = -0.2;
-                laptop.add(screen);
-            }
-
-            const chairSeatGeo = new THREE.BoxGeometry(0.5, 0.1, 0.5);
-            const positions = [[-1.5, -0.5], [1.5, -0.5], [0, -2]];
-            positions.forEach(pos => {
-                const chair = createPhysicsMesh(chairSeatGeo.clone(), chairMat.clone(), 'chair', 5);
-                chair.position.set(pos[0], 0.5, pos[1]);
-                
-                const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.1), chairMat);
-                back.position.set(0, 0.35, 0.2);
-                chair.add(back);
-                
-                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.1), chairMat);
-                leg.position.set(0, -0.3, 0);
-                chair.add(leg);
+            [[-1.5, -1.5], [1.5, -1.5]].forEach(pos => {
+                const t = createPhysicsMesh(tableGeo, woodMat, 'table', 50, false);
+                t.position.set(pos[0], 0.8, pos[1]);
             });
 
-            const bossGeo = new THREE.BoxGeometry(0.6, 1.2, 0.4);
-            const boss = createPhysicsMesh(bossGeo, bossMat.clone(), 'boss', 20);
-            boss.position.set(0, 0.6, -3);
+            // Laptops
+            const laptopGeo = new THREE.BoxGeometry(0.35, 0.03, 0.25);
+            for(let i=0; i<4; i++) {
+                const laptop = createPhysicsMesh(laptopGeo.clone(), silverMat.clone(), 'laptop', 2);
+                laptop.position.set(-2 + i*1.2, 0.9, -1.5);
+            }
 
-            const head = new THREE.Mesh(new THREE.SphereGeometry(0.25), bossMat);
-            head.position.set(0, 0.8, 0);
-            boss.add(head);
+            // Chairs
+            const chairSeatGeo = new THREE.BoxGeometry(0.5, 0.1, 0.5);
+            [[-1.5, -0.5], [1.5, -0.5]].forEach(pos => {
+                const chair = createPhysicsMesh(chairSeatGeo.clone(), chairMat.clone(), 'chair', 5);
+                chair.position.set(pos[0], 0.5, pos[1]);
+            });
 
-            const armGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.8);
-            const lArm = new THREE.Mesh(armGeo, bossMat); lArm.position.set(-0.4, 0.2, 0); boss.add(lArm);
-            const rArm = new THREE.Mesh(armGeo, bossMat); rArm.position.set(0.4, 0.2, 0); boss.add(rArm);
-
-            const hammerGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.5);
-            const hammer = createPhysicsMesh(hammerGeo, woodMat.clone(), 'tool', 8);
-            hammer.position.set(-0.5, 1.0, -0.5);
-            hammer.rotation.x = Math.PI/2;
-            const hammerHead = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.1), toolMat);
-            hammerHead.position.set(0, 0.25, 0);
-            hammer.add(hammerHead);
-
-            const batGeo = new THREE.CylinderGeometry(0.05, 0.02, 0.8);
-            const bat = createPhysicsMesh(batGeo, woodMat.clone(), 'tool', 6);
-            bat.position.set(0.5, 1.0, -0.5);
-            bat.rotation.z = Math.PI/2;
-            bat.material.color.setHex(0xd2b48c);
-
-            const stickGeo = new THREE.CylinderGeometry(0.02, 0.02, 1.0);
-            const stick = createPhysicsMesh(stickGeo, toolMat.clone(), 'tool', 5);
-            stick.position.set(0, 1.0, -0.5);
-            stick.rotation.x = Math.PI/2;
-            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.08), toolMat);
-            blade.position.set(0, -0.5, 0.1);
-            blade.rotation.x = 0.5;
-            stick.add(blade);
+            // Boss
+            const boss = createPhysicsMesh(new THREE.BoxGeometry(0.6, 1.2, 0.4), bossMat.clone(), 'boss', 20);
+            boss.position.set(0, 0.6, -4);
         }
 
         function setupHands() {
@@ -370,13 +281,18 @@
             dolly.add(hand1);
             dolly.add(hand2);
 
-            const handMesh1 = handModelFactory.createHandModel(hand1, 'mesh');
-            const handMesh2 = handModelFactory.createHandModel(hand2, 'mesh');
-            hand1.add(handMesh1);
-            hand2.add(handMesh2);
+            hand1.add(handModelFactory.createHandModel(hand1, 'mesh'));
+            hand2.add(handModelFactory.createHandModel(hand2, 'mesh'));
 
-            hand1.userData = { prevPos: new THREE.Vector3() };
-            hand2.userData = { prevPos: new THREE.Vector3() };
+            const setupHandData = (hand) => {
+                hand.userData = { 
+                    prevPos: new THREE.Vector3(),
+                    velocity: new THREE.Vector3(),
+                    isPalmShowing: false
+                };
+            };
+            setupHandData(hand1);
+            setupHandData(hand2);
 
             const onHandConnect = (event) => {
                 const hand = event.target;
@@ -393,12 +309,6 @@
             interactables.forEach(obj => {
                 if (obj.userData.grabbed) return;
 
-                // Max velocity cap to prevent objects glitching completely out
-                if (obj.userData.velocity.lengthSq() > 400) {
-                    obj.userData.velocity.normalize().multiplyScalar(20);
-                }
-
-                // Apply Gravity & Velocity
                 obj.userData.velocity.y -= GRAVITY * dt;
                 obj.position.addScaledVector(obj.userData.velocity, dt);
 
@@ -408,173 +318,130 @@
 
                 const radius = obj.userData.radius || 0.2;
 
-                // 1. Floor Collision
                 if (obj.position.y < FLOOR_Y + radius) {
                     obj.position.y = FLOOR_Y + radius;
-                    obj.userData.velocity.y *= -0.4; // Bounce
-                    
-                    obj.userData.velocity.x *= 0.8;
-                    obj.userData.velocity.z *= 0.8;
-                    obj.userData.angularVelocity.multiplyScalar(0.8);
-
-                    if (obj.userData.velocity.lengthSq() < 0.05) {
-                        obj.userData.velocity.set(0,0,0);
-                    }
+                    obj.userData.velocity.y *= -0.3; 
+                    obj.userData.velocity.x *= 0.7;
+                    obj.userData.velocity.z *= 0.7;
                 }
 
-                // 2. Wall Collision (Bounce objects off the room walls)
                 const boundsLimit = ROOM_SIZE - radius;
-                if (obj.position.x > boundsLimit) { obj.position.x = boundsLimit; obj.userData.velocity.x *= -0.5; }
-                if (obj.position.x < -boundsLimit) { obj.position.x = -boundsLimit; obj.userData.velocity.x *= -0.5; }
-                if (obj.position.z > boundsLimit) { obj.position.z = boundsLimit; obj.userData.velocity.z *= -0.5; }
-                if (obj.position.z < -boundsLimit) { obj.position.z = -boundsLimit; obj.userData.velocity.z *= -0.5; }
-
-                // 3. Tool Smashing Logic
-                const isFast = obj.userData.velocity.lengthSq() > 9;
-                const isGrabbedAndSwung = obj.userData.type === 'tool' && obj.userData.grabbed && leftHandSpeed > 2.0;
-                
-                if ((obj.userData.type === 'tool' && (isFast || isGrabbedAndSwung)) || (obj.userData.type === 'boss' && isFast)) {
-                    tempBox1.setFromObject(obj);
-                    interactables.forEach(target => {
-                        if (target === obj || target.userData.broken) return;
-                        tempBox2.setFromObject(target);
-                        if (tempBox1.intersectsBox(tempBox2)) {
-                            target.userData.break();
-                            obj.userData.velocity.multiplyScalar(0.5);
-                        }
-                    });
+                if (Math.abs(obj.position.x) > boundsLimit) {
+                    obj.position.x = Math.sign(obj.position.x) * boundsLimit;
+                    obj.userData.velocity.x *= -0.5;
+                }
+                if (Math.abs(obj.position.z) > boundsLimit) {
+                    obj.position.z = Math.sign(obj.position.z) * boundsLimit;
+                    obj.userData.velocity.z *= -0.5;
                 }
             });
         }
 
         function handleGestures(dt) {
-            // --- LEFT HAND: Utility (Grab / Throw) ---
-            if (leftHandObj && leftHandObj.joints && leftHandObj.joints['wrist']) {
-                const indexTip = leftHandObj.joints['index-finger-tip'];
-                const thumbTip = leftHandObj.joints['thumb-tip'];
-                const indexBase = leftHandObj.joints['index-finger-phalanx-proximal'];
-                const wrist = leftHandObj.joints['wrist'];
+            const hands = [leftHandObj, rightHandObj].filter(h => h && h.joints && h.joints['wrist']);
+            
+            hands.forEach(hand => {
+                const wrist = hand.joints['wrist'];
+                const wPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
+                
+                // Calculate velocity with smoothing
+                const currentVel = new THREE.Vector3().subVectors(wPos, hand.userData.prevPos).divideScalar(dt);
+                hand.userData.velocity.lerp(currentVel, 0.2); // Smoothing
+                hand.userData.prevPos.copy(wPos);
 
-                if (indexTip && thumbTip && indexBase) {
-                    tempVec1.setFromMatrixPosition(indexTip.matrixWorld);
-                    tempVec2.setFromMatrixPosition(thumbTip.matrixWorld);
-                    const pinchDist = tempVec1.distanceTo(tempVec2);
+                // Palm facing detection
+                const palmNormal = new THREE.Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
+                const headsetForward = new THREE.Vector3();
+                camera.getWorldDirection(headsetForward);
+                headsetForward.y = 0;
+                headsetForward.normalize();
+                
+                // Is palm showing? (Facing generally away or toward)
+                hand.userData.isPalmShowing = Math.abs(palmNormal.dot(headsetForward)) > 0.6;
+                hand.userData.palmDot = palmNormal.dot(headsetForward);
+            });
+
+            // --- MOVEMENT: Both Palms ---
+            if (leftHandObj && rightHandObj && leftHandObj.userData.isPalmShowing && rightHandObj.userData.isPalmShowing) {
+                const headsetForward = new THREE.Vector3();
+                camera.getWorldDirection(headsetForward);
+                headsetForward.y = 0;
+                headsetForward.normalize();
+
+                const avgVel = new THREE.Vector3().addVectors(leftHandObj.userData.velocity, rightHandObj.userData.velocity).multiplyScalar(0.5);
+                const thrust = avgVel.dot(headsetForward);
+
+                // Reduce sensitivity with deadzone and lower multiplier
+                if (Math.abs(thrust) > 0.5) {
+                    const speedMultiplier = 1.2;
+                    dolly.position.addScaledVector(headsetForward, thrust * dt * speedMultiplier);
+                }
+
+                // Player boundary
+                const playerLimit = ROOM_SIZE - 0.5;
+                dolly.position.x = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.x));
+                dolly.position.z = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.z));
+            }
+
+            // --- RIGHT HAND: Interaction (Pinch & Punch) ---
+            if (rightHandObj && rightHandObj.joints['wrist']) {
+                const wrist = rightHandObj.joints['wrist'];
+                const indexTip = rightHandObj.joints['index-finger-tip'];
+                const thumbTip = rightHandObj.joints['thumb-tip'];
+                const middleTip = rightHandObj.joints['middle-finger-tip'];
+
+                if (indexTip && thumbTip && middleTip) {
+                    const iPos = new THREE.Vector3().setFromMatrixPosition(indexTip.matrixWorld);
+                    const tPos = new THREE.Vector3().setFromMatrixPosition(thumbTip.matrixWorld);
+                    const mPos = new THREE.Vector3().setFromMatrixPosition(middleTip.matrixWorld);
+                    const wPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
                     
-                    const wristPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
-                    const vel = new THREE.Vector3().subVectors(wristPos, leftHandObj.userData.prevPos).divideScalar(dt);
-                    leftHandSpeed = vel.length();
-                    leftHandObj.userData.prevPos.copy(wristPos);
+                    const pinchDist = iPos.distanceTo(tPos);
+                    const isPinching = pinchDist < 0.03;
+                    const isFist = wPos.distanceTo(mPos) < 0.12;
 
-                    const isPinching = pinchDist < 0.025;
+                    // 1. Smashing (Fist)
+                    if (isFist && rightHandObj.userData.velocity.length() > 1.5) {
+                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.2, 0.2, 0.2));
+                        interactables.forEach(obj => {
+                            if (obj.userData.broken) return;
+                            tempBox2.setFromObject(obj);
+                            if (tempBox1.intersectsBox(tempBox2)) obj.userData.break();
+                        });
+                    }
 
-                    if (isPinching && !leftPinchState && !grabbedObject) {
-                        const rayOrigin = tempVec1.clone();
-                        const basePos = new THREE.Vector3().setFromMatrixPosition(indexBase.matrixWorld);
-                        const rayDir = new THREE.Vector3().subVectors(rayOrigin, basePos).normalize();
-                        
-                        raycaster.set(rayOrigin, rayDir);
-                        const intersects = raycaster.intersectObjects(interactables, false);
-
-                        if (intersects.length > 0) {
-                            grabbedObject = intersects[0].object;
-                            if (grabbedObject.userData.grabbable) {
-                                grabbedObject.userData.grabbed = true;
-                                grabbedObject.userData.velocity.set(0,0,0);
-                                grabbedObject.userData.angularVelocity.set(0,0,0);
-                            } else {
-                                grabbedObject = null;
+                    // 2. Grabbing (Pinch) - No Raycast, proximity based for better feel
+                    if (isPinching && !rightPinchState && !grabbedObject) {
+                        // Find nearest grabbable
+                        let closest = null;
+                        let minDist = 0.4; // Max grab distance
+                        interactables.forEach(obj => {
+                            if (!obj.userData.grabbable) return;
+                            const d = iPos.distanceTo(obj.position);
+                            if (d < minDist) {
+                                minDist = d;
+                                closest = obj;
                             }
+                        });
+                        if (closest) {
+                            grabbedObject = closest;
+                            grabbedObject.userData.grabbed = true;
+                            grabbedObject.userData.velocity.set(0,0,0);
                         }
                     } 
-                    else if (!isPinching && leftPinchState && grabbedObject) {
+                    else if (!isPinching && rightPinchState && grabbedObject) {
                         grabbedObject.userData.grabbed = false;
-                        grabbedObject.userData.velocity.copy(vel).multiplyScalar(1.5);
-                        grabbedObject.userData.angularVelocity.set(
-                            (Math.random()-0.5)*10,
-                            (Math.random()-0.5)*10,
-                            (Math.random()-0.5)*10
-                        );
+                        // Throwing
+                        const throwVel = rightHandObj.userData.velocity.clone().multiplyScalar(1.2);
+                        grabbedObject.userData.velocity.copy(throwVel);
                         grabbedObject = null;
                     }
 
                     if (grabbedObject) {
-                        const holdPos = new THREE.Vector3().setFromMatrixPosition(indexBase.matrixWorld);
-                        grabbedObject.position.lerp(holdPos, 0.4);
-                        const handQuat = new THREE.Quaternion().setFromRotationMatrix(indexBase.matrixWorld);
-                        grabbedObject.quaternion.slerp(handQuat, 0.3);
+                        grabbedObject.position.lerp(iPos, 0.3);
                     }
 
-                    if (!grabbedObject) {
-                        pointerLine.visible = true;
-                        const rayOrigin = tempVec1.clone();
-                        const basePos = new THREE.Vector3().setFromMatrixPosition(indexBase.matrixWorld);
-                        const rayDir = new THREE.Vector3().subVectors(rayOrigin, basePos).normalize();
-                        
-                        pointerLine.position.copy(rayOrigin);
-                        const targetPos = rayOrigin.clone().add(rayDir);
-                        pointerLine.lookAt(targetPos);
-                    } else {
-                        pointerLine.visible = false;
-                    }
-
-                    leftPinchState = isPinching;
-                }
-            }
-
-            // --- RIGHT HAND: Locomotion & Smashing ---
-            if (rightHandObj && rightHandObj.joints && rightHandObj.joints['wrist']) {
-                const wrist = rightHandObj.joints['wrist'];
-                const wPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
-
-                const vel = new THREE.Vector3().subVectors(wPos, rightHandObj.userData.prevPos).divideScalar(dt);
-                rightHandSpeed = vel.length();
-                rightHandObj.userData.prevPos.copy(wPos);
-
-                const middleTip = rightHandObj.joints['middle-finger-tip'];
-                if (middleTip) {
-                    tempVec1.setFromMatrixPosition(middleTip.matrixWorld);
-                    const isFist = wPos.distanceTo(tempVec1) < 0.1;
-
-                    if (isFist && rightHandSpeed > 1.0) { 
-                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.15, 0.15, 0.15));
-                        
-                        interactables.forEach(obj => {
-                            if (obj.userData.broken) return;
-                            tempBox2.setFromObject(obj);
-                            if (tempBox1.intersectsBox(tempBox2)) {
-                                obj.userData.break();
-                            }
-                        });
-                    }
-
-                    if (!isFist) {
-                        const palmNormal = new THREE.Vector3(0, -1, 0).applyQuaternion(wrist.quaternion);
-                        
-                        const headsetForward = new THREE.Vector3();
-                        camera.getWorldDirection(headsetForward);
-                        headsetForward.y = 0;
-                        headsetForward.normalize();
-
-                        const isFacingAway = palmNormal.dot(headsetForward) > 0.5;
-                        const isFacingToward = palmNormal.dot(headsetForward) < -0.5;
-                        
-                        // CLAMP LOCMOMOTION SPEED to prevent tracking glitches from teleporting player
-                        const rawThrust = vel.dot(headsetForward);
-                        const thrustSpeed = Math.max(-3.0, Math.min(3.0, rawThrust)); 
-
-                        if (isFacingAway && thrustSpeed > 0.3) {
-                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 2.0);
-                        }
-                        else if (isFacingToward && thrustSpeed < -0.3) {
-                            dolly.position.addScaledVector(headsetForward, thrustSpeed * dt * 2.0);
-                        }
-
-                        // BOUNDARY LIMITS FOR THE PLAYER
-                        // Don't let the camera move outside the walls
-                        const playerLimit = ROOM_SIZE - 0.5; 
-                        dolly.position.x = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.x));
-                        dolly.position.z = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.z));
-                    }
+                    rightPinchState = isPinching;
                 }
             }
         }
@@ -590,26 +457,13 @@
         }
 
         function render() {
-            const dt = Math.min(clock.getDelta(), 0.1); 
-
+            const dt = Math.min(clock.getDelta(), 0.05); 
             if (renderer.xr.isPresenting) {
                 handleGestures(dt);
                 updatePhysics(dt);
             }
-
             renderer.render(scene, camera);
         }
-
-        if ('xr' in navigator) {
-            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-                if (!supported) {
-                    document.getElementById('error-msg').style.display = 'block';
-                }
-            });
-        } else {
-            document.getElementById('error-msg').style.display = 'block';
-        }
-
     </script>
 </body>
 </html>
