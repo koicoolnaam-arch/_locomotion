@@ -370,7 +370,7 @@
                 if (Math.abs(thrust) > 0.15) {
                     // Walk speed multiplier (~1.4m/s typical human speed)
                     // Adjusted for the scale of the virtual environment
-                    const humanWalkMultiplier = 0.15; 
+                    const humanWalkMultiplier = 0.05; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * humanWalkMultiplier);
                     
                     // Smoothly transition to walking speed
