@@ -221,18 +221,22 @@
 
             mesh.userData.break = function() {
                 if (this.broken) return;
-                if (this.type !== 'table') this.broken = true;
+                
+                // Add a small cooldown/flag to prevent physics feedback loops
+                if (this.type !== 'table') {
+                    this.broken = true;
+                }
 
                 if (this.type === 'boss') {
                     this.material.color.setHex(0xff0000);
-                    this.velocity.set((Math.random()-0.5)*3, 2, (Math.random()-0.5)*3);
+                    this.userData.velocity.set((Math.random()-0.5)*3, 2, (Math.random()-0.5)*3);
                 } 
                 else if (this.type === 'laptop') {
                     this.material.color.setHex(0x111111);
-                    this.velocity.set((Math.random()-0.5)*2, 3, (Math.random()-0.5)*2);
+                    this.userData.velocity.set((Math.random()-0.5)*2, 3, (Math.random()-0.5)*2);
                 }
                 else if (this.type === 'chair') {
-                    this.velocity.set((Math.random()-0.5)*2, 1.5, (Math.random()-0.5)*2);
+                    this.userData.velocity.set((Math.random()-0.5)*2, 1.5, (Math.random()-0.5)*2);
                 }
             };
 
@@ -339,6 +343,8 @@
             
             hands.forEach(hand => {
                 const wrist = hand.joints['wrist'];
+                if (!wrist) return;
+                
                 const wPos = new THREE.Vector3().setFromMatrixPosition(wrist.matrixWorld);
                 
                 const currentVel = new THREE.Vector3().subVectors(wPos, hand.userData.prevPos).divideScalar(dt);
@@ -368,12 +374,8 @@
                 let thrust = avgVel.dot(headsetForward);
 
                 if (Math.abs(thrust) > 0.15) {
-                    // Walk speed multiplier (~1.4m/s typical human speed)
-                    // Adjusted for the scale of the virtual environment
                     const humanWalkMultiplier = 0.05; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * humanWalkMultiplier);
-                    
-                    // Smoothly transition to walking speed
                     playerVelocity.lerp(targetVel, ACCELERATION_SMOOTHING);
                 } else {
                     playerVelocity.multiplyScalar(FRICTION);
@@ -382,16 +384,14 @@
                 playerVelocity.multiplyScalar(FRICTION);
             }
 
-            // Apply calculated walking velocity
             dolly.position.addScaledVector(playerVelocity, dt * 10);
             
-            // RIGID BOUNDARY FOR PLAYER
             const playerLimit = ROOM_SIZE - 0.5;
             dolly.position.x = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.x));
             dolly.position.z = Math.max(-playerLimit, Math.min(playerLimit, dolly.position.z));
 
             // --- RIGHT HAND: Interaction (Pinch & Punch) ---
-            if (rightHandObj && rightHandObj.joints['wrist']) {
+            if (rightHandObj && rightHandObj.joints && rightHandObj.joints['wrist']) {
                 const wrist = rightHandObj.joints['wrist'];
                 const indexTip = rightHandObj.joints['index-finger-tip'];
                 const thumbTip = rightHandObj.joints['thumb-tip'];
@@ -405,16 +405,27 @@
                     
                     const pinchDist = iPos.distanceTo(tPos);
                     const isPinching = pinchDist < 0.035;
-                    const isFist = wPos.distanceTo(mPos) < 0.12;
+                    // Improved fist detection threshold
+                    const isFist = wPos.distanceTo(mPos) < 0.11;
 
-                    // Crushing objects with a punch
-                    if (isFist && rightHandObj.userData.velocity.length() > 1.2) {
-                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.25, 0.25, 0.25));
-                        interactables.forEach(obj => {
-                            if (obj.userData.broken) return;
-                            tempBox2.setFromObject(obj);
-                            if (tempBox1.intersectsBox(tempBox2)) obj.userData.break();
-                        });
+                    // Crushing objects with a punch - Optimized to prevent freezing
+                    if (isFist && rightHandObj.userData.velocity.length() > 1.4) {
+                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.2, 0.2, 0.2));
+                        for (let i = 0; i < interactables.length; i++) {
+                            const obj = interactables[i];
+                            if (obj.userData.broken) continue;
+                            
+                            // Cheap sphere-based check first to save CPU
+                            const distToObj = wPos.distanceTo(obj.position);
+                            if (distToObj < 0.6) {
+                                tempBox2.setFromObject(obj);
+                                if (tempBox1.intersectsBox(tempBox2)) {
+                                    obj.userData.break();
+                                    // Only break one object per punch frame to keep it stable
+                                    break; 
+                                }
+                            }
+                        }
                     }
 
                     // Grabbing objects with a pinch
