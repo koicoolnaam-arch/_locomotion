@@ -374,7 +374,7 @@
                 let thrust = avgVel.dot(headsetForward);
 
                 if (Math.abs(thrust) > 0.15) {
-                    const humanWalkMultiplier = 0.05; 
+                    const humanWalkMultiplier = 0.15; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * humanWalkMultiplier);
                     playerVelocity.lerp(targetVel, ACCELERATION_SMOOTHING);
                 } else {
