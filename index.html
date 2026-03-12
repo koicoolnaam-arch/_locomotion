@@ -363,7 +363,7 @@
                 hand.userData.isPalmShowing = Math.abs(palmNormal.dot(headsetForward)) > 0.55;
             });
 
-            // --- UPDATED WALKING SPEED: 0.20 ---
+            // --- REALISTIC HUMAN WALKING SPEED: Both Palms ---
             if (leftHandObj && rightHandObj && leftHandObj.userData.isPalmShowing && rightHandObj.userData.isPalmShowing) {
                 const headsetForward = new THREE.Vector3();
                 camera.getWorldDirection(headsetForward);
@@ -374,7 +374,7 @@
                 let thrust = avgVel.dot(headsetForward);
 
                 if (Math.abs(thrust) > 0.15) {
-                    const humanWalkMultiplier = 0.20; 
+                    const humanWalkMultiplier = 0.05; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * humanWalkMultiplier);
                     playerVelocity.lerp(targetVel, ACCELERATION_SMOOTHING);
                 } else {
@@ -405,29 +405,23 @@
                     
                     const pinchDist = iPos.distanceTo(tPos);
                     const isPinching = pinchDist < 0.035;
-                    
-                    // FIXED Punch Motion: Threshold tuned for a clenched hand (distance between wrist and middle tip)
-                    // Lowered velocity requirement slightly to make it easier to trigger, widened collision volume.
-                    const isFist = wPos.distanceTo(mPos) < 0.14; 
-                    const handVel = rightHandObj.userData.velocity.length();
+                    // Improved fist detection threshold
+                    const isFist = wPos.distanceTo(mPos) < 0.11;
 
-                    if (isFist && handVel > 1.1) {
-                        // Create a slightly larger collision box for more forgiving hits
-                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.4, 0.4, 0.4));
-                        
+                    // Crushing objects with a punch - Optimized to prevent freezing
+                    if (isFist && rightHandObj.userData.velocity.length() > 1.4) {
+                        tempBox1.setFromCenterAndSize(wPos, new THREE.Vector3(0.2, 0.2, 0.2));
                         for (let i = 0; i < interactables.length; i++) {
                             const obj = interactables[i];
                             if (obj.userData.broken) continue;
                             
-                            // Check distance first (optimizes performance)
+                            // Cheap sphere-based check first to save CPU
                             const distToObj = wPos.distanceTo(obj.position);
-                            if (distToObj < 0.8) {
+                            if (distToObj < 0.6) {
                                 tempBox2.setFromObject(obj);
                                 if (tempBox1.intersectsBox(tempBox2)) {
                                     obj.userData.break();
-                                    // Apply impact force based on hand velocity
-                                    const impact = rightHandObj.userData.velocity.clone().multiplyScalar(0.5);
-                                    obj.userData.velocity.add(impact);
+                                    // Only break one object per punch frame to keep it stable
                                     break; 
                                 }
                             }
