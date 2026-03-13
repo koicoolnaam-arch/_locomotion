@@ -367,8 +367,8 @@
 
                 // Lower deadzone for butter-smooth engagement
                 if (Math.abs(thrust) > 0.2) {
-                    // Set speed strictly to 1.79 
-                    const speedMultiplier = 1.79; 
+                    // Set speed strictly to 0.179 
+                    const speedMultiplier = 0.179; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * speedMultiplier);
                     
                     // Smoothly transition current velocity to target
