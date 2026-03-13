@@ -223,11 +223,11 @@
                 if (this.type !== 'table') this.broken = true;
 
                 if (this.type === 'boss') {
-                    this.material.color.setHex(0xff0000);
+                    mesh.material.color.setHex(0xff0000);
                     this.velocity.set((Math.random()-0.5)*3, 2, (Math.random()-0.5)*3);
                 } 
                 else if (this.type === 'laptop') {
-                    this.material.color.setHex(0x111111);
+                    mesh.material.color.setHex(0x111111);
                     this.velocity.set((Math.random()-0.5)*2, 3, (Math.random()-0.5)*2);
                 }
                 else if (this.type === 'chair') {
@@ -367,8 +367,8 @@
 
                 // Lower deadzone for butter-smooth engagement
                 if (Math.abs(thrust) > 0.2) {
-                    // Set speed strictly to 0.19 for human walking pace
-                    const speedMultiplier = 0.19; 
+                    // Set speed strictly to 1.79 
+                    const speedMultiplier = 1.79; 
                     const targetVel = headsetForward.clone().multiplyScalar(thrust * speedMultiplier);
                     
                     // Smoothly transition current velocity to target
@@ -459,7 +459,8 @@
         }
 
         function render() {
-            const dt = Math.min(clock.getDelta(), 0.05); 
+            // Guard dt to strictly prevent 0 so it never divides by zero and creates NaNs.
+            const dt = Math.max(Math.min(clock.getDelta(), 0.05), 0.001); 
             if (renderer.xr.isPresenting) {
                 handleGestures(dt);
                 updatePhysics(dt);
